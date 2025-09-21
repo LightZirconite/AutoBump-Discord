@@ -10,6 +10,7 @@ import puppeteer from 'puppeteer';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import readline from 'readline';
 
 // Simplified flow: sequential login + sending /bump
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -445,10 +446,18 @@ async function detectExistingSession(page, cfg) {
     }
     const elapsed = Date.now() - t0;
     if (elapsed > 0 && elapsed % step < 500) {
-      log(`Observation: ${Math.floor(elapsed/1000)}s / ${Math.floor(detectTotal/1000)}s (still on /login)`);
+      const secs = Math.floor(elapsed/1000);
+      const totalSecs = Math.floor(detectTotal/1000);
+      const spin = UI.spinner ? ` ${nextSpinner()}` : '';
+      if (UI.inlineProgress && isTTY) {
+        writeInline(`${ICONS.loading} Observation: ${secs}s / ${totalSecs}s (still on /login)${spin}`);
+      } else {
+        log(`Observation: ${secs}s / ${totalSecs}s (still on /login)`);
+      }
     }
     await sleep(500);
   }
+  if (UI.inlineProgress && isTTY) endInline();
   log('Observation finished: still on /login -> not signed in');
   return { logged: false };
 }
@@ -458,6 +467,10 @@ async function detectExistingSession(page, cfg) {
   // Logging: nouveau schéma (cfg.logging) avec compat ancienne clé
   LOG_MINIMAL = !!(cfg.logging?.minimal ?? cfg.minimalLogs);
   LOG_COLORED = !!(cfg.logging?.colored ?? cfg.coloredLogs);
+  const UI = {
+    inlineProgress: cfg.ui?.inlineProgress ?? true,
+    spinner: cfg.ui?.spinner ?? true
+  };
   
   console.log(createSeparator('BUMP SCRIPT START', 'thick'));
   log(`${ICONS.progress} Script initialization`);
@@ -496,6 +509,28 @@ async function detectExistingSession(page, cfg) {
     return `${min} min ${rem} s`;
   }
 
+  // Inline progress utilities (single-line updates)
+  const isTTY = !!process.stdout.isTTY;
+  const spinnerFrames = process.platform === 'win32'
+    ? ['|','/','-','\\']
+    : ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+  let spinnerIdx = 0;
+  function nextSpinner() {
+    const f = spinnerFrames[spinnerIdx % spinnerFrames.length];
+    spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
+    return f;
+  }
+  function writeInline(text) {
+    if (!(UI.inlineProgress && isTTY)) return;
+    readline.clearLine(process.stdout, 0);
+    readline.cursorTo(process.stdout, 0);
+    process.stdout.write(text);
+  }
+  function endInline() {
+    if (!(UI.inlineProgress && isTTY)) return;
+    process.stdout.write('\n');
+  }
+
   async function waitDelayWithProgress(totalMs, label = 'waiting') {
     if (totalMs <= 0) return; // nothing
     
@@ -518,9 +553,15 @@ async function detectExistingSession(page, cfg) {
       if (totalMs >= 10 * 1000) { // avoid spam for very short waits
         const progress = Math.round((waited / totalMs) * 100);
         const progressBar = '█'.repeat(Math.floor(progress / 5)) + '░'.repeat(20 - Math.floor(progress / 5));
-        log(`${ICONS.time} Progress ${label}: ${formatDelay(waited)} / ${formatDelay(totalMs)} [${progressBar}] ${progress}%`);
+        const spin = UI.spinner ? ` ${nextSpinner()}` : '';
+        if (UI.inlineProgress && isTTY) {
+          writeInline(`${ICONS.time} Progress ${label}: ${formatDelay(waited)} / ${formatDelay(totalMs)} [${progressBar}] ${progress}%${spin}`);
+        } else {
+          log(`${ICONS.time} Progress ${label}: ${formatDelay(waited)} / ${formatDelay(totalMs)} [${progressBar}] ${progress}%`);
+        }
       }
     }
+    if (UI.inlineProgress && isTTY && totalMs >= 10 * 1000) endInline();
   }
 
   async function runAccount(accountCfg) {
