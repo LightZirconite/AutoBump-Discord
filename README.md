@@ -105,6 +105,36 @@ Chaque passage:
 - Si Discord change ses sélecteurs: il faudra ajuster les sélecteurs d’entrée/boutons
 - Vérifier les logs de démarrage: liste des sessions, statut boucle, délai affiché
 
+### Puppeteer: Failed to launch the browser process
+
+Si vous voyez une erreur du type:
+
+```
+Error: Failed to launch the browser process!
+.../chrome-linux64/chrome: 1: Syntax error: "(" unexpected
+```
+
+Causes et solutions:
+
+- WSL/Linux sans binaire compatible: le Chrome téléchargé par Puppeteer (Linux) ne peut pas s’exécuter dans votre environnement. Le script détecte Windows/WSL et tente automatiquement:
+  - d’utiliser `PUPPETEER_EXECUTABLE_PATH` si défini,
+  - sinon le binaire téléchargé par Puppeteer,
+  - sinon une installation locale (Chrome/Edge) sur Windows.
+
+- Variables utiles:
+  - `PUPPETEER_EXECUTABLE_PATH`: chemin complet vers chrome/chromium/msedge.
+  - `PUPPETEER_CACHE_DIR`: répertoire de cache Puppeteer si vous voulez persister ailleurs.
+
+- Sous Linux/WSL sans serveur X (pas de DISPLAY), le script force `headless: "new"`. Pour afficher l’UI, lancez avec un DISPLAY actif ou définissez `headless: false` dans `config.json` (par compte).
+
+- Windows: assurez-vous que Chrome ou Edge est installé. Le script cherchera automatiquement dans Program Files/LocalAppData.
+
+Exemple PowerShell pour forcer un chemin:
+
+```powershell
+$env:PUPPETEER_EXECUTABLE_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"; npm start
+```
+
 ---
 
 ## Licence

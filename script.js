@@ -9,6 +9,7 @@ async function loadConfig() {
 import puppeteer from 'puppeteer';
 import fs from 'fs/promises';
 import path from 'path';
+import os from 'os';
 
 // Script simplifié: login séquentiel + envoi /bump
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -536,7 +537,63 @@ async function detectExistingSession(page, cfg) {
       '--disable-features=Translate,ExtensionsToolbarMenu',
       '--disable-infobars'
     ];
-    const browser = await puppeteer.launch({ headless: false, defaultViewport: null, userDataDir, args: extraArgs });
+
+    // Cross-platform launch resolution: choose executablePath if needed and safe headless on Linux/WSL without display.
+    function isWSL() {
+      return process.platform === 'linux' && /microsoft/i.test(os.release());
+    }
+
+    async function fileExists(p) {
+      try { await fs.access(p); return true; } catch { return false; }
+    }
+
+    async function findLocalChromeWindows() {
+      const env = process.env;
+      const candidates = [
+        path.join(env["PROGRAMFILES"] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Google', 'Chrome', 'Application', 'chrome.exe') : null,
+        path.join(env["PROGRAMFILES"] || 'C\\\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Microsoft', 'Edge SxS', 'Application', 'msedge.exe') : null
+      ].filter(Boolean);
+      for (const c of candidates) { if (await fileExists(c)) return c; }
+      return null;
+    }
+
+    async function resolveExecutablePath() {
+      // Priority 1: explicit env
+      const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
+      if (fromEnv && await fileExists(fromEnv)) return fromEnv;
+
+      // Priority 2: Puppeteer's downloaded browser
+      try {
+        const p = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
+        if (p && await fileExists(p)) return p;
+      } catch {}
+
+      // Priority 3: System installations (Windows only for now)
+      if (process.platform === 'win32') {
+        const winChrome = await findLocalChromeWindows();
+        if (winChrome) return winChrome;
+      }
+      return null; // let Puppeteer decide
+    }
+
+    const headlessMode = (() => {
+      if (typeof accountCfg.headless !== 'undefined') return accountCfg.headless;
+      if (process.platform === 'linux' || isWSL()) {
+        // In Linux/WSL, default to headless if no GUI/display; Puppeteer v22 supports 'new'
+        return process.env.DISPLAY ? false : 'new';
+      }
+      return false;
+    })();
+
+    const execPath = await resolveExecutablePath();
+    const launchOptions = { headless: headlessMode, defaultViewport: null, userDataDir, args: extraArgs };
+    if (execPath) launchOptions.executablePath = execPath;
+
+    const browser = await puppeteer.launch(launchOptions);
     // Réutiliser la première page si elle existe (évite about:blank supplémentaire)
     let pages = await browser.pages();
     let page = pages[0];
