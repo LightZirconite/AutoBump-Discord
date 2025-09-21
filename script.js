@@ -186,6 +186,7 @@ async function simpleBump(page, cfg) {
   await page.goto(channelUrl, { waitUntil: 'domcontentloaded' });
   const d = cfg.bumpDelays || {};
   const afterChannel = d.afterChannelMs ?? (cfg.simpleDelays?.afterChannelMs ?? 5000);
+  const finalizeAfterBumpsMs = d.finalizeAfterBumpsMs ?? 4000; // extra safety delay after sending the two bumps
   await sleep(afterChannel);
 
   // Optional security step
@@ -226,6 +227,8 @@ async function simpleBump(page, cfg) {
     await postWebhook(cfg.webhookUrl, { event: 'bumps-complete', message: 'Two bumps sent', _meta: meta });
   }
   await sleep(afterSecondBump);
+  // Final small wait so Discord has time to process/send the last message before potential browser close
+  if (finalizeAfterBumpsMs > 0) await sleep(finalizeAfterBumpsMs);
 }
 
 // Configure 24h security directly within the bump flow
