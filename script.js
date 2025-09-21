@@ -459,8 +459,16 @@ async function detectExistingSession(page, cfg) {
   await sleep(stabilizationMs);
   log('Start observing URL to determine session state');
   const t0 = Date.now();
+  let lastPoke = 0;
   let lastPath = '';
   while (Date.now() - t0 < detectTotal) {
+    // Proactively handle the choose-account screen while we observe
+    if (Date.now() - lastPoke > 1000) {
+      try {
+        await pokeChooseAccountIfVisible(page, cfg);
+      } catch {}
+      lastPoke = Date.now();
+    }
     const u = page.url();
     try { lastPath = new URL(u).pathname; } catch { lastPath = u; }
     if (!(/\/login(\b|$)/.test(lastPath))) {
@@ -492,27 +500,27 @@ async function detectExistingSession(page, cfg) {
 //   - 'add': click "Ajouter un compte" to go to normal sign-in
 // - chooseAccountTimeoutMs: how long to wait for the screen (default 8000)
 async function handleChooseAccountIfPresent(page, accountCfg) {
-  const auth = { ...(accountCfg.auth || {}), ...(typeof accountCfg.auth === 'undefined' ? (cfg.auth || {}) : {}) };
+  // Merge global auth (from runAccount) and account-specific auth
+  const auth = { ...(accountCfg.__globalAuth || {}), ...(accountCfg.auth || {}) };
   const strategy = auth.chooseAccountStrategy || 'connect';
   const waitMs = auth.chooseAccountTimeoutMs ?? 8000;
-  const rootSelector = 'section.chooseAccountAuthBox_df9c06';
+  // Be resilient to hashed class names by using contains selectors
+  const rootSelector = 'section[class*="chooseAccountAuthBox_"]';
   try {
     await page.waitForSelector(rootSelector, { timeout: waitMs });
   } catch { return; }
   log('[Auth] "Choose an account" screen detected');
   if (strategy === 'add') {
-    // Click the button with class text__7a01b ("Ajouter un compte" in FR but class is stable)
+    // Click the small text button under the actions area (language-agnostic, class-based)
     const clicked = await page.evaluate(() => {
-      const candidates = Array.from(document.querySelectorAll('button.textButton__7a01b, .textButton__7a01b, .actions_df9c06 button, [data-mana-component="text-button"]'));
+      const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
+      const actionAreas = root ? Array.from(root.querySelectorAll('[class*="actions_"]')) : [];
+      const candidates = [
+        ...Array.from(document.querySelectorAll('button[class*="textButton_"], .textButton__7a01b, [data-mana-component="text-button"]'))
+      ];
       for (const el of candidates) {
-        // Heuristic: small text button under actions
-        const inActions = el.closest('.actions_df9c06');
-        if (inActions) {
-          el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-          return true;
-        }
-        // Fallback: any element with class text__7a01b
-        if (el.classList.contains('text__7a01b')) {
+        const inActions = el.closest('[class*="actions_"]');
+        if (inActions || (root && root.contains(el))) {
           el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
           return true;
         }
@@ -524,7 +532,7 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
   }
   // Default: click the "Connexion" button of the first account card
   const done = await page.evaluate(() => {
-    const cards = Array.from(document.querySelectorAll('.accountCard__920b8'));
+    const cards = Array.from(document.querySelectorAll('[class*="accountCard_"]'));
     if (!cards.length) return false;
     const card = cards[0];
     // Buttons inside the card (first is often "Connexion")
@@ -535,6 +543,39 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
     return false;
   });
   log(done ? '[Auth] Clicked "Connexion" on account card' : '[Auth] Could not click "Connexion"');
+}
+
+// Lightweight, non-blocking choose-account handler used during observation
+async function pokeChooseAccountIfVisible(page, accountCfg) {
+  const auth = { ...(accountCfg.__globalAuth || {}), ...(accountCfg.auth || {}) };
+  const strategy = auth.chooseAccountStrategy || 'connect';
+  // Only act if we're on /login to avoid accidental clicks elsewhere
+  const path = (() => { try { return new URL(page.url()).pathname; } catch { return page.url(); } })();
+  if (!/\/login(\b|$)/.test(path)) return false;
+  if (strategy === 'add') {
+    const clicked = await page.evaluate(() => {
+      const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
+      if (!root) return false;
+      const btn = root.querySelector('button[class*="textButton_"], .textButton__7a01b, [data-mana-component="text-button"]');
+      if (btn) { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+      return false;
+    });
+    if (clicked) log('[Auth] Poke: clicked "Ajouter un compte"');
+    return clicked;
+  } else {
+    const done = await page.evaluate(() => {
+      const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
+      if (!root) return false;
+      const card = root.querySelector('[class*="accountCard_"]');
+      if (!card) return false;
+      const buttons = Array.from(card.querySelectorAll('button, [role="button"]'));
+      const connect = buttons.find(b => b && b.textContent && b.textContent.trim().length > 0) || buttons[0];
+      if (connect) { connect.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; }
+      return false;
+    });
+    if (done) log('[Auth] Poke: clicked "Connexion" on account card');
+    return done;
+  }
 }
 
 (async () => {
@@ -746,13 +787,19 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
     try {
       log(`${ICONS.browser} [${sessionName}] Initial access to login page`);
       await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
-      // Handle Discord "Choose an account" screen if it appears
-      await handleChooseAccountIfPresent(page, accountCfg).catch(() => {});
-      const detect = await detectExistingSession(page, accountCfg);
+      // Enrich with global auth options to be used by choose-account logic
+      const mergedCfg = { ...accountCfg, __globalAuth: (cfg.auth || {}) };
+      // Immediately try to resolve the choose-account screen if visible
+      try { await pokeChooseAccountIfVisible(page, mergedCfg); } catch {}
+      // Then handle it with a short, blocking wait in case it appears right after DOMContentLoaded
+      await handleChooseAccountIfPresent(page, mergedCfg).catch(() => {});
+      // Observe login state with periodic pokes
+      const detect = await detectExistingSession(page, mergedCfg);
       if (!detect.logged) {
-        await simpleLogin(page, accountCfg, { skipGoto: true, skipInitialWait: true });
+        // If still on /login, run simple login
+        await simpleLogin(page, mergedCfg, { skipGoto: true, skipInitialWait: true });
       }
-      await simpleBump(page, accountCfg);
+      await simpleBump(page, mergedCfg);
       log(`${ICONS.success} [${sessionName}] Done.`);
     } catch (e) {
       console.error(`${ICONS.error} [${sessionName}] Error:`, e.message);
