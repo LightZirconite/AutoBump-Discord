@@ -8,6 +8,15 @@
     "delayMs": 3600000,
     "maxCycles": null
   },
+  "ui": {
+    "inlineProgress": true,
+    "spinner": true
+  },
+  "auth": {
+    "resetSessionOnStart": false,
+  "chooseAccountStrategy": "connect",
+    "chooseAccountTimeoutMs": 8000
+  },
   "accounts": [
     {
       "email": "",

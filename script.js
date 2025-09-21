@@ -462,6 +462,47 @@ async function detectExistingSession(page, cfg) {
   return { logged: false };
 }
 
+// Handle the Discord "Choose an account" screen when it appears
+// Strategy options (accountCfg.auth or cfg.auth):
+// - chooseAccountStrategy: 'connect' (default) | 'add'
+//   - 'connect': click the "Connexion" button for the first account card
+//   - 'add': click "Ajouter un compte" to go to normal sign-in
+// - chooseAccountTimeoutMs: how long to wait for the screen (default 8000)
+async function handleChooseAccountIfPresent(page, accountCfg) {
+  const auth = { ...(accountCfg.auth || {}), ...(typeof accountCfg.auth === 'undefined' ? (cfg.auth || {}) : {}) };
+  const strategy = auth.chooseAccountStrategy || 'connect';
+  const waitMs = auth.chooseAccountTimeoutMs ?? 8000;
+  const rootSelector = 'section.chooseAccountAuthBox_df9c06';
+  try {
+    await page.waitForSelector(rootSelector, { timeout: waitMs });
+  } catch { return; }
+  log('[Auth] "Choose an account" screen detected');
+  if (strategy === 'add') {
+    // Click "Ajouter un compte"
+    const clicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, [role="button"], .textButton__7a01b'));
+      const add = btns.find(b => /ajouter un compte/i.test(b.textContent || ''));
+      if (add) { add.dispatchEvent(new MouseEvent('click', { bubbles:true })); return true; }
+      return false;
+    });
+    log(clicked ? '[Auth] Clicked "Ajouter un compte"' : '[Auth] Could not click "Ajouter un compte"');
+    return;
+  }
+  // Default: click the "Connexion" button of the first account card
+  const done = await page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll('.accountCard__920b8'));
+    if (!cards.length) return false;
+    const card = cards[0];
+    const btn = card.querySelector('button');
+    // Prefer the button that contains "Connexion"
+    const buttons = Array.from(card.querySelectorAll('button, [role="button"]'));
+    let connect = buttons.find(b => /connexion/i.test(b.textContent || '')) || btn;
+    if (connect) { connect.dispatchEvent(new MouseEvent('click', { bubbles:true })); return true; }
+    return false;
+  });
+  log(done ? '[Auth] Clicked "Connexion" on account card' : '[Auth] Could not click "Connexion"');
+}
+
 (async () => {
   const cfg = await loadConfig();
   // Logging: nouveau schéma (cfg.logging) avec compat ancienne clé
@@ -569,6 +610,10 @@ async function detectExistingSession(page, cfg) {
     try { await fs.mkdir(sessionRoot, { recursive: true }); } catch {}
     const sessionName = (accountCfg.sessionName || 'default-session').replace(/[^a-zA-Z0-9_-]/g, '_');
     const userDataDir = path.join(sessionRoot, sessionName);
+    // Optional: reset session folder before launching (fresh profile)
+    if (accountCfg.resetSessionOnStart || (typeof accountCfg.resetSessionOnStart === 'undefined' && cfg.auth?.resetSessionOnStart)) {
+      try { await fs.rm(userDataDir, { recursive: true, force: true }); } catch {}
+    }
     log(`[${sessionName}] Opening browser`);
     const extraArgs = [
       '--window-size=1200,900',
@@ -666,7 +711,7 @@ async function detectExistingSession(page, cfg) {
     const launchOptions = { headless: headlessMode, defaultViewport: null, userDataDir, args: extraArgs };
     if (execPath) launchOptions.executablePath = execPath;
 
-    const browser = await puppeteer.launch(launchOptions);
+  const browser = await puppeteer.launch(launchOptions);
     // Réutiliser la première page si elle existe (évite about:blank supplémentaire)
     let pages = await browser.pages();
     let page = pages[0];
@@ -683,6 +728,8 @@ async function detectExistingSession(page, cfg) {
     try {
       log(`${ICONS.browser} [${sessionName}] Initial access to login page`);
       await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
+      // Handle Discord "Choose an account" screen if it appears
+      await handleChooseAccountIfPresent(page, accountCfg).catch(() => {});
       const detect = await detectExistingSession(page, accountCfg);
       if (!detect.logged) {
         await simpleLogin(page, accountCfg, { skipGoto: true, skipInitialWait: true });
