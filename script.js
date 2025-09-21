@@ -1,7 +1,7 @@
-// Charge config.json (supporte les commentaires)
+// Load config.json (supports comments)
 async function loadConfig() {
   const raw = await fs.readFile(path.join(process.cwd(), 'config.json'), 'utf-8');
-  // Retire les commentaires (// ou # en début de ligne, ou /* ... */)
+  // Strip comments (// or # at line start, and /* ... */ blocks)
   const noBlockComments = raw.replace(/\/\*[\s\S]*?\*\//g, '');
   const noLineComments = noBlockComments.replace(/^\s*(#|\/\/).*$/gm, '');
   return JSON.parse(noLineComments);
@@ -11,22 +11,22 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
-// Script simplifié: login séquentiel + envoi /bump
+// Simplified flow: sequential login + sending /bump
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let LOG_MINIMAL = false;
 let LOG_COLORED = false;
 const ESSENTIAL_PATTERNS = [
-  /Ouverture navigateur/,
-  /Accès initial page login/,
-  /Deux bumps effectués|2ème bump envoyé/,
-  /Sécurité 24h activée/,
-  /Erreur:/,
-  /Navigateur fermé/,
-  /Lancement second compte/,
-  /Tous les comptes traités/,
-  /Sécurité] Confirmé 24h/,
+  /Opening browser/,
+  /Initial access to login page/,
+  /Two bumps sent|Second bump sent/,
+  /Security 24h enabled|24h confirmed/,
+  /Error:/,
+  /Browser closed/,
+  /Start of cycle/,
+  /All accounts processed/,
+  /\[Security\] 24h confirmed/,
 ];
-// Icônes et symboles pour l'affichage
+// Icons and symbols for display
 const ICONS = {
   success: '✓',
   error: '✗',
@@ -69,29 +69,29 @@ const COLORS = {
   brightWhite: '\x1b[97m'
 };
 function colorFor(msg){
-  if (/Erreur|error/i.test(msg)) return COLORS.brightRed + COLORS.bold;
-  if (/Sécurité.*Confirmé|Sécurité 24h activée/.test(msg)) return COLORS.brightGreen + COLORS.bold;
-  if (/Deux bumps effectués|2ème bump envoyé|1er bump envoyé/.test(msg)) return COLORS.brightCyan + COLORS.bold;
-  if (/Ouverture navigateur|Accès initial/.test(msg)) return COLORS.brightBlue;
-  if (/Navigateur fermé/.test(msg)) return COLORS.magenta;
-  if (/Lancement second compte|cycle/.test(msg)) return COLORS.brightYellow + COLORS.bold;
-  if (/Connecté|session active/.test(msg)) return COLORS.brightGreen;
-  if (/Observation|Attente|Progression/.test(msg)) return COLORS.gray;
-  if (/\[Sécurité\]/.test(msg)) return COLORS.cyan;
+  if (/Error/i.test(msg)) return COLORS.brightRed + COLORS.bold;
+  if (/Security.*confirmed|Security 24h enabled/.test(msg)) return COLORS.brightGreen + COLORS.bold;
+  if (/Two bumps sent|Second bump sent|First bump sent/.test(msg)) return COLORS.brightCyan + COLORS.bold;
+  if (/Opening browser|Initial access/.test(msg)) return COLORS.brightBlue;
+  if (/Browser closed/.test(msg)) return COLORS.magenta;
+  if (/Start of cycle|cycle/.test(msg)) return COLORS.brightYellow + COLORS.bold;
+  if (/(Signed in|session active)/.test(msg)) return COLORS.brightGreen;
+  if (/(Observation|Waiting|Progress)/.test(msg)) return COLORS.gray;
+  if (/\[Security\]/.test(msg)) return COLORS.cyan;
   return COLORS.reset;
 }
 
 function getIcon(msg) {
   if (/Erreur|error/i.test(msg)) return ICONS.error;
-  if (/Sécurité.*Confirmé|Sécurité 24h activée/.test(msg)) return ICONS.security;
-  if (/bump envoyé/.test(msg)) return ICONS.bump;
-  if (/Ouverture navigateur/.test(msg)) return ICONS.browser;
-  if (/Navigateur fermé/.test(msg)) return ICONS.success;
+  if (/Security.*confirmed|Security 24h enabled/.test(msg)) return ICONS.security;
+  if (/(bump sent|Two bumps sent)/i.test(msg)) return ICONS.bump;
+  if (/Opening browser/.test(msg)) return ICONS.browser;
+  if (/Browser closed/.test(msg)) return ICONS.success;
   if (/cycle/.test(msg)) return ICONS.cycle;
-  if (/Connecté|session active/.test(msg)) return ICONS.connected;
-  if (/Observation|Attente|Progression/.test(msg)) return ICONS.loading;
-  if (/\[Sécurité\]/.test(msg)) return ICONS.security;
-  if (/Lancement/.test(msg)) return ICONS.progress;
+  if (/(Signed in|session active)/.test(msg)) return ICONS.connected;
+  if (/(Observation|Waiting|Progress)/.test(msg)) return ICONS.loading;
+  if (/\[Security\]/.test(msg)) return ICONS.security;
+  if (/(Launching|Start)/.test(msg)) return ICONS.progress;
   return ICONS.bullet;
 }
 
@@ -100,7 +100,7 @@ function log(msg) {
     const keep = ESSENTIAL_PATTERNS.some(r => r.test(msg));
     if (!keep) return;
   }
-  const timestamp = new Date().toLocaleTimeString('fr-FR');
+  const timestamp = new Date().toLocaleTimeString('en-US');
   const icon = getIcon(msg);
   if (LOG_COLORED) {
     const color = colorFor(msg);
@@ -111,7 +111,7 @@ function log(msg) {
 }
 // (bloc intrus supprimé)
 
-// Connexion simple: renseigne email/mot de passe si disponibles, sinon attend la connexion
+// Simple login: fill email/password when available, otherwise wait for manual login
 async function simpleLogin(page, cfg, opts = {}) {
   const email = cfg.email || cfg.login || null;
   const password = cfg.password || null;
@@ -135,12 +135,12 @@ async function simpleLogin(page, cfg, opts = {}) {
       await sleep(afterTypeMs);
       const btn = await page.$('button[type="submit"]');
       if (btn) { await btn.click(); await sleep(submitWaitMs); }
-      log('Tentative de connexion envoyée');
+      log('Login attempt submitted');
     } catch (e) {
-      log('Impossible de renseigner automatiquement les identifiants; poursuite en manuel.');
+      log('Could not auto-fill credentials; continue manually.');
     }
   } else {
-    log('Identifiants non fournis; connecte-toi manuellement si requis.');
+    log('Credentials not provided; sign in manually if required.');
   }
 
   const start = Date.now();
@@ -149,22 +149,22 @@ async function simpleLogin(page, cfg, opts = {}) {
       const connected = await page.evaluate(() => {
         return !!(document.querySelector('#app-mount [class*="sidebar"], #app-mount nav'));
       });
-      if (connected) { log(`${ICONS.connected} Connecté.`); return true; }
+      if (connected) { log(`${ICONS.connected} Signed in.`); return true; }
     } catch {}
     await sleep(2000);
   }
-  throw new Error('Timeout login');
+  throw new Error('Login timeout');
 }
 
 async function simpleBump(page, cfg) {
   const channelUrl = cfg.channelUrl || 'https://discord.com/channels/1150371679520968804/1300408274184830979';
-  log('Aller au salon bump');
+  log('Navigate to bump channel');
   await page.goto(channelUrl, { waitUntil: 'domcontentloaded' });
   const d = cfg.bumpDelays || {};
   const afterChannel = d.afterChannelMs ?? (cfg.simpleDelays?.afterChannelMs ?? 5000);
   await sleep(afterChannel);
 
-  // Étape sécurité (optionnelle)
+  // Optional security step
   if (cfg.enableSecurityAction !== false) {
     await configureSecurityActions24hInline(page, cfg);
   }
@@ -177,15 +177,15 @@ async function simpleBump(page, cfg) {
   await page.waitForSelector(inputSelector, { timeout: 30000 });
   await page.click(inputSelector);
   await sleep(400);
-  // 1er bump
+  // First bump
   await page.keyboard.type('/bump', { delay: 85 });
   await sleep(betweenKeys);
   await page.keyboard.press('Enter');
   await sleep(500);
   await page.keyboard.press('Enter');
-  log(`${ICONS.bump} 1er bump envoyé`);
+  log(`${ICONS.bump} First bump sent`);
   await sleep(afterFirstBump);
-  // 2ème bump
+  // Second bump
   await page.keyboard.type('/bump', { delay: 85 });
   await sleep(betweenKeys);
   await page.keyboard.press('ArrowDown');
@@ -193,28 +193,28 @@ async function simpleBump(page, cfg) {
   await page.keyboard.press('Enter');
   await sleep(500);
   await page.keyboard.press('Enter');
-  log(`${ICONS.bump} 2ème bump envoyé`);
+  log(`${ICONS.bump} Second bump sent`);
   if (cfg.webhookUrl) {
     const sessionLabel = cfg.sessionName || 'session';
     const cycle = cfg.__currentCycle;
-    const meta = { session: sessionLabel, channel: cfg.channelUrl || 'inconnu' };
+    const meta = { session: sessionLabel, channel: cfg.channelUrl || 'unknown' };
     if (cycle !== undefined) meta.cycle = cycle;
-    await postWebhook(cfg.webhookUrl, { event: 'bumps-complete', message: 'Deux bumps effectués', _meta: meta });
+    await postWebhook(cfg.webhookUrl, { event: 'bumps-complete', message: 'Two bumps sent', _meta: meta });
   }
   await sleep(afterSecondBump);
 }
 
-// Configure sécurité directement dans le flux bump
+// Configure 24h security directly within the bump flow
 async function configureSecurityActions24hInline(page, cfg) {
   const d = cfg.securityDelays || {};
   const preClick = d.preClickButtonMs ?? 800;
   const afterButton = d.afterClickButtonMs ?? 1600;
   const afterSelectOpen = d.afterSelectOpenMs ?? 1000;
   const afterOption = d.afterOptionClickMs ?? 1200;
-  const afterSave = d.afterSaveMs ?? 1600; // utilisé maintenant comme simple pause post-sélection
-  const waitSaveButtonMs = d.waitSaveButtonMs ?? 6000; // nouveau: temps max d'apparition du bouton Sauvegarder
-  const savePollIntervalMs = d.savePollIntervalMs ?? 400; // intervalle de polling
-  const confirmWaitMs = d.confirmWaitMs ?? 7000; // temps max pour voir la valeur 24h appliquée
+  const afterSave = d.afterSaveMs ?? 1600; // post-selection wait
+  const waitSaveButtonMs = d.waitSaveButtonMs ?? 6000; // max time to find the Save button
+  const savePollIntervalMs = d.savePollIntervalMs ?? 400; // polling interval
+  const confirmWaitMs = d.confirmWaitMs ?? 7000; // max time to see 24h applied
   const confirmPollIntervalMs = d.confirmPollIntervalMs ?? 500;
   const securityDebugOnFail = !!d.securityDebugOnFail;
   const buttonSelector = 'button.button__6e2b9.actionButton__36c3e';
@@ -222,11 +222,11 @@ async function configureSecurityActions24hInline(page, cfg) {
   const valueSelector = 'div.value__3f413';
   const option24Selector = 'div.option__3f413';
 
-  try { await page.waitForSelector(buttonSelector, { timeout: 10000 }); } catch { log('[Sécurité] Bouton introuvable -> abandon'); return; }
-  log('[Sécurité] Bouton détecté');
+  try { await page.waitForSelector(buttonSelector, { timeout: 10000 }); } catch { log('[Security] Button not found -> skipping'); return; }
+  log('[Security] Button detected');
   await sleep(preClick);
 
-  // Déjà configuré ?
+  // Already configured?
   try {
     const already = await page.evaluate(sel => {
       const val = document.querySelector(sel);
@@ -234,17 +234,17 @@ async function configureSecurityActions24hInline(page, cfg) {
       const txt = (val.textContent||'').toLowerCase();
       return txt.includes('24');
     }, valueSelector);
-    if (already) { log('[Sécurité] Déjà configuré sur 24h -> skip'); if (cfg.webhookUrl) await postWebhook(cfg.webhookUrl, { event: 'security-skip', message: 'Déjà 24h' }); return; }
-  } catch { log('[Sécurité] Impossible de lire l’état initial'); }
+    if (already) { log('[Security] Already set to 24h -> skip'); if (cfg.webhookUrl) await postWebhook(cfg.webhookUrl, { event: 'security-skip', message: 'Already 24h' }); return; }
+  } catch { log('[Security] Could not read initial state'); }
 
-  try { await page.click(buttonSelector); log('[Sécurité] Panneau ouvert (clic bouton)'); } catch { log('[Sécurité] Échec clic bouton'); return; }
+  try { await page.click(buttonSelector); log('[Security] Panel opened (button click)'); } catch { log('[Security] Failed to click button'); return; }
   await sleep(afterButton);
 
-  // Ouvrir le menu déroulant
-  try { await page.click(selectWrapper); log('[Sécurité] Sélecteur ouvert'); } catch { try { await page.click(valueSelector); log('[Sécurité] Ouverture via value'); } catch { log('[Sécurité] Impossible ouvrir sélecteur'); } }
+  // Open dropdown
+  try { await page.click(selectWrapper); log('[Security] Dropdown opened'); } catch { try { await page.click(valueSelector); log('[Security] Opened via value'); } catch { log('[Security] Could not open dropdown'); } }
   await sleep(afterSelectOpen);
 
-  // Cliquer sur option 24h exacte
+  // Click exact 24h option
   let picked = false;
   try {
     picked = await page.evaluate(optSel => {
@@ -254,11 +254,11 @@ async function configureSecurityActions24hInline(page, cfg) {
       return false;
     }, option24Selector);
   } catch { }
-  log(picked ? '[Sécurité] Option 24h sélectionnée' : '[Sécurité] Option 24h NON trouvée');
+  log(picked ? '[Security] 24h option selected' : '[Security] 24h option NOT found');
   await sleep(afterOption);
 
-  // Recherche et clic sur le bouton Sauvegarder (polling texte, insensible aux classes)
-  // Stratégie: on poll jusqu'à waitSaveButtonMs, on essaie plusieurs modes de clic.
+  // Find and click the Save button (text-based polling, class-agnostic)
+  // Strategy: poll until waitSaveButtonMs and try multiple click modes.
   let saveClicked = false;
   let saveFound = false;
   const tStart = Date.now();
@@ -269,7 +269,7 @@ async function configureSecurityActions24hInline(page, cfg) {
           const all = Array.from(root.querySelectorAll('button, [role="button"], span'));
             return all.find(el => textRegex.test((el.textContent||'').trim()));
         }
-        const needle = /sauvegarder/i;
+        const needle = /save|sauvegarder/i;
         const candidate = byText(document, needle);
         if (!candidate) return { found: false, clicked: false };
         // Si c'est un span on remonte vers parent button/role=button
@@ -292,15 +292,15 @@ async function configureSecurityActions24hInline(page, cfg) {
     if (!saveClicked) await sleep(savePollIntervalMs);
   }
   if (saveClicked) {
-    log('[Sécurité] Bouton Sauvegarder cliqué');
+    log('[Security] Save button clicked');
   } else if (saveFound) {
-    log('[Sécurité] Bouton Sauvegarder trouvé mais clic possiblement bloqué / non effectif');
+    log('[Security] Save button found but click may be blocked/ineffective');
   } else {
-    log('[Sécurité] Bouton Sauvegarder non trouvé (timeout)');
+    log('[Security] Save button not found (timeout)');
   }
   await sleep(afterSave);
 
-  // Vérification finale avec polling
+  // Final confirmation with polling
   let confirmed = false;
   const tConfStart = Date.now();
   while (Date.now() - tConfStart < confirmWaitMs && !confirmed) {
@@ -309,21 +309,21 @@ async function configureSecurityActions24hInline(page, cfg) {
         const val = document.querySelector(sel);
         if (!val) return false;
         const txt = (val.textContent||'').toLowerCase();
-        // Accepter différentes formes contenant 24
+        // Accept texts containing 24
         return /24/.test(txt);
       }, valueSelector);
     } catch {}
     if (!confirmed) await sleep(confirmPollIntervalMs);
   }
   if (confirmed) {
-    log('[Sécurité] Confirmé 24h (final)');
+    log('[Security] 24h confirmed (final)');
   } else if (securityDebugOnFail) {
-    log(`[Sécurité] NON confirmé 24h (debug)${saveClicked ? ' (malgré clic Sauvegarder)' : ''}`);
+    log(`[Security] NOT confirmed 24h (debug)${saveClicked ? ' (despite Save click)' : ''}`);
   }
   if (!confirmed && securityDebugOnFail) {
     try {
       await page.screenshot({ path: `security-fail-${Date.now()}.png` });
-      log('[Sécurité] Screenshot debug capturé');
+      log('[Security] Debug screenshot captured');
     } catch {}
   }
   if (cfg.webhookUrl && confirmed) {
@@ -331,23 +331,23 @@ async function configureSecurityActions24hInline(page, cfg) {
     const cycle = cfg.__currentCycle;
     const meta = { session: sessionLabel, picked, saveClicked };
     if (cycle !== undefined) meta.cycle = cycle;
-    await postWebhook(cfg.webhookUrl, { event: 'security-activated', message: 'Sécurité 24h activée', _meta: meta });
+    await postWebhook(cfg.webhookUrl, { event: 'security-activated', message: 'Security 24h enabled', _meta: meta });
   }
 
-  // Envoi d'un message dans le salon pour confirmer l'activation 24h
+  // Send a message in the channel to confirm the 24h activation
   if (confirmed) {
-    const defaultMsg = 'Sécurité 24h activée ✅';
+    const defaultMsg = 'Security 24h enabled ✅';
     const chatMsg = (cfg.messages && cfg.messages.securityActivated && cfg.messages.securityActivated.text) || defaultMsg;
     try {
       await sendChannelMessage(page, chatMsg, cfg);
-      log('[Sécurité] Message de confirmation envoyé dans le salon');
+      log('[Security] Confirmation message sent to channel');
     } catch (e) {
-      log('[Sécurité] Échec d\'envoi du message de confirmation dans le salon');
+      log('[Security] Failed to send confirmation message to channel');
     }
   }
 }
 
-// Envoie un message texte simple dans le salon courant
+// Send a simple text message in the current channel
 async function sendChannelMessage(page, text, cfg) {
   const inputSelector = 'div[data-slate-node="element"]';
   const d = cfg.bumpDelays || {};
@@ -362,12 +362,12 @@ async function sendChannelMessage(page, text, cfg) {
 }
 
 async function postWebhook(url, payload) {
-  const embedOnly = payload.embedOnly ?? true; // désormais par défaut embed
+  const embedOnly = payload.embedOnly ?? true; // default to embed-only
   const globalEmbedOnly = typeof payload.embedOnly === 'undefined' ? true : payload.embedOnly;
   const event = payload.event || 'event';
   const message = payload.message || '';
   const account = payload.accountLabel || (payload._meta && (payload._meta.session || payload._meta.account)) || 'session';
-  // Couleurs par type
+  // Colors per event type
   const colorMap = {
     'bumps-complete': 0x2ecc71,
     'security-activated': 0x1abc9c,
@@ -401,7 +401,7 @@ async function postWebhook(url, payload) {
         })
       });
     } catch (e) {
-      log('Webhook erreur (embed)');
+      log('Webhook error (embed)');
     }
   } else {
     try {
@@ -411,45 +411,45 @@ async function postWebhook(url, payload) {
         body: JSON.stringify({ content: `[${event}] ${message}` })
       });
     } catch (e) {
-      log('Webhook erreur (content)');
+      log('Webhook error (content)');
     }
   }
 }
 
-// Envoi embed (Discord) – fallback silencieux si échec
+// Send embed (Discord) – backwards-compatible helper
 async function postWebhookEmbed(url, { title, description, color = 5793266, fields = [], footer, timestamp = true }) {
-  // Gardé pour compat rétro mais redirige vers postWebhook
+  // Kept for retro-compatibility, forwards to postWebhook
   return postWebhook(url, { event: title || 'info', message: description || '', embedOnly: true, _meta: Object.fromEntries(fields.map(f => [f.name || 'field', f.value])) });
 }
 
-// Nouvelle détection: on ouvre d'abord /login et on observe l'URL pendant ~20s.
-// Si après la fenêtre d'observation l'URL n'est plus /login => déjà connecté.
-// Sinon => pas connecté, on doit faire le login manuel.
+// New detection: open /login first and observe URL for ~20s.
+// If after observation the URL is no longer /login => already signed in.
+// Else => not signed in, manual/simple login is needed.
 async function detectExistingSession(page, cfg) {
   const startup = cfg.startup || {};
-  const stabilizationMs = startup.stabilizationMs ?? 30000; // temps laissé au navigateur pour charger la session
-  const detectTotal = startup.loginDetectWaitMs ?? 20000; // observation après stabilisation
+  const stabilizationMs = startup.stabilizationMs ?? 30000; // let the browser load session
+  const detectTotal = startup.loginDetectWaitMs ?? 20000; // observation after stabilization
   const step = startup.loginDetectProgressStepMs ?? 5000;
 
-  log(`Stabilisation lancement navigateur ${stabilizationMs}ms`);
+  log(`Browser startup stabilization ${stabilizationMs}ms`);
   await sleep(stabilizationMs);
-  log('Début observation URL pour déterminer état session');
+  log('Start observing URL to determine session state');
   const t0 = Date.now();
   let lastPath = '';
   while (Date.now() - t0 < detectTotal) {
     const u = page.url();
     try { lastPath = new URL(u).pathname; } catch { lastPath = u; }
-    if (!/\/login(\b|$)/.test(lastPath)) {
-      log(`URL a quitté /login -> session active (${lastPath})`);
+    if (!(/\/login(\b|$)/.test(lastPath))) {
+      log(`URL left /login -> session active (${lastPath})`);
       return { logged: true };
     }
     const elapsed = Date.now() - t0;
     if (elapsed > 0 && elapsed % step < 500) {
-      log(`Observation: ${Math.floor(elapsed/1000)}s / ${Math.floor(detectTotal/1000)}s (toujours sur /login)`);
+      log(`Observation: ${Math.floor(elapsed/1000)}s / ${Math.floor(detectTotal/1000)}s (still on /login)`);
     }
     await sleep(500);
   }
-  log('Observation terminée: toujours sur /login -> pas connecté');
+  log('Observation finished: still on /login -> not signed in');
   return { logged: false };
 }
 
@@ -459,11 +459,11 @@ async function detectExistingSession(page, cfg) {
   LOG_MINIMAL = !!(cfg.logging?.minimal ?? cfg.minimalLogs);
   LOG_COLORED = !!(cfg.logging?.colored ?? cfg.coloredLogs);
   
-  console.log(createSeparator('DÉMARRAGE SCRIPT BUMP', 'thick'));
-  log(`${ICONS.progress} Initialisation du script`);
+  console.log(createSeparator('BUMP SCRIPT START', 'thick'));
+  log(`${ICONS.progress} Script initialization`);
   console.log(createSeparator('', 'single'));
 
-  // Utilitaires d'affichage / attente améliorés
+  // Display helpers
   function createSeparator(title = '', type = 'double') {
     const width = 60;
     let char = '=';
@@ -496,10 +496,10 @@ async function detectExistingSession(page, cfg) {
     return `${min} min ${rem} s`;
   }
 
-  async function waitDelayWithProgress(totalMs, label = 'attente') {
-    if (totalMs <= 0) return; // rien
+  async function waitDelayWithProgress(totalMs, label = 'waiting') {
+    if (totalMs <= 0) return; // nothing
     
-    // Granularité dynamique
+    // Dynamic granularity
     let step;
     if (totalMs >= 15 * 60 * 1000) step = 5 * 60 * 1000; // 5 min
     else if (totalMs >= 5 * 60 * 1000) step = 60 * 1000; // 1 min
@@ -515,10 +515,10 @@ async function detectExistingSession(page, cfg) {
       await sleep(slice);
       waited += slice;
       
-      if (totalMs >= 10 * 1000) { // éviter spam si très court
+      if (totalMs >= 10 * 1000) { // avoid spam for very short waits
         const progress = Math.round((waited / totalMs) * 100);
         const progressBar = '█'.repeat(Math.floor(progress / 5)) + '░'.repeat(20 - Math.floor(progress / 5));
-        log(`${ICONS.time} Progression ${label}: ${formatDelay(waited)} / ${formatDelay(totalMs)} [${progressBar}] ${progress}%`);
+        log(`${ICONS.time} Progress ${label}: ${formatDelay(waited)} / ${formatDelay(totalMs)} [${progressBar}] ${progress}%`);
       }
     }
   }
@@ -528,7 +528,7 @@ async function detectExistingSession(page, cfg) {
     try { await fs.mkdir(sessionRoot, { recursive: true }); } catch {}
     const sessionName = (accountCfg.sessionName || 'default-session').replace(/[^a-zA-Z0-9_-]/g, '_');
     const userDataDir = path.join(sessionRoot, sessionName);
-    log(`[${sessionName}] Ouverture navigateur`);
+    log(`[${sessionName}] Opening browser`);
     const extraArgs = [
       '--window-size=1200,900',
       '--no-first-run',
@@ -640,25 +640,25 @@ async function detectExistingSession(page, cfg) {
       }
     }
     try {
-      log(`${ICONS.browser} [${sessionName}] Accès initial page login`);
+      log(`${ICONS.browser} [${sessionName}] Initial access to login page`);
       await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
       const detect = await detectExistingSession(page, accountCfg);
       if (!detect.logged) {
         await simpleLogin(page, accountCfg, { skipGoto: true, skipInitialWait: true });
       }
       await simpleBump(page, accountCfg);
-      log(`${ICONS.success} [${sessionName}] Terminé.`);
+      log(`${ICONS.success} [${sessionName}] Done.`);
     } catch (e) {
-      console.error(`${ICONS.error} [${sessionName}] Erreur:`, e.message);
+      console.error(`${ICONS.error} [${sessionName}] Error:`, e.message);
       if (accountCfg.webhookUrl) {
-        await postWebhook(accountCfg.webhookUrl, { event: 'error', message: e.message || 'Erreur inconnue', _meta: { session: accountCfg.sessionName || sessionName } });
+        await postWebhook(accountCfg.webhookUrl, { event: 'error', message: e.message || 'Unknown error', _meta: { session: accountCfg.sessionName || sessionName } });
       }
     }
     const close = accountCfg.closeBrowserOnFinish !== false; // par défaut on ferme
     if (close) {
-      try { await browser.close(); log(`${ICONS.success} [${sessionName}] Navigateur fermé (closeBrowserOnFinish).`); } catch {}
+      try { await browser.close(); log(`${ICONS.success} [${sessionName}] Browser closed (closeBrowserOnFinish).`); } catch {}
     } else {
-      log(`${ICONS.info} [${sessionName}] Navigateur laissé ouvert (closeBrowserOnFinish=false).`);
+      log(`${ICONS.info} [${sessionName}] Browser left open (closeBrowserOnFinish=false).`);
     }
   }
 
@@ -684,53 +684,53 @@ async function detectExistingSession(page, cfg) {
     : (loopCfg.delayBetweenAccountsMs ?? cfg.secondUserDelayMs ?? 3600000); // compat
   const maxCycles = loopCfg.maxCycles ?? null; // null = infini
 
-  // Récapitulatif de la configuration de boucle & comptes
-  log(`${ICONS.info} Boucle: ${loopEnabled ? 'activée' : 'désactivée'}`);
-  log(`${ICONS.info} Comptes configurés: ${normalizedAccounts.length}`);
+  // Loop & accounts summary
+  log(`${ICONS.info} Loop: ${loopEnabled ? 'enabled' : 'disabled'}`);
+  log(`${ICONS.info} Configured accounts: ${normalizedAccounts.length}`);
   if (normalizedAccounts.length) {
     const names = normalizedAccounts.map(a => a.sessionName || 'session').join(', ');
     log(`${ICONS.user} Sessions: ${names}`);
   }
   if (normalizedAccounts.length >= 2) {
-    log(`${ICONS.time} Délai entre exécutions: ${formatDelay(delayMs)}`);
+    log(`${ICONS.time} Delay between runs: ${formatDelay(delayMs)}`);
   }
-  if (maxCycles) log(`${ICONS.info} Limite de cycles: ${maxCycles}`);
+  if (maxCycles) log(`${ICONS.info} Max cycles limit: ${maxCycles}`);
 
   if (!loopEnabled) {
-    // Mode non bouclé: enchaîner les comptes une seule fois, avec attente entre chacun
+    // Non-loop mode: run each account once, with wait between
     for (let i = 0; i < normalizedAccounts.length; i++) {
       const accCfg = { ...normalizedAccounts[i] };
       await runAccount(accCfg);
       const isLast = i === normalizedAccounts.length - 1;
       if (!isLast && delayMs > 0) {
-        log(`${ICONS.time} Attente ${formatDelay(delayMs)} avant le prochain compte`);
-        await waitDelayWithProgress(delayMs, 'avant prochain compte');
+        log(`${ICONS.time} Waiting ${formatDelay(delayMs)} before next account`);
+        await waitDelayWithProgress(delayMs, 'before next account');
       }
     }
-    console.log(createSeparator('TERMINÉ', 'thick'));
-    log(`${ICONS.success} Tous les comptes traités (mode non bouclé).`);
+    console.log(createSeparator('DONE', 'thick'));
+    log(`${ICONS.success} All accounts processed (non-loop mode).`);
   } else {
     let cycle = 1;
     while (true) {
       console.log(createSeparator(`CYCLE #${cycle}`, 'cycle'));
-      log(`${ICONS.cycle} Début du cycle #${cycle}`);
+      log(`${ICONS.cycle} Start of cycle #${cycle}`);
       console.log(createSeparator('', 'single'));
 
       for (let i = 0; i < normalizedAccounts.length; i++) {
         const acc = normalizedAccounts[i];
         const accCfg = { ...acc, __currentCycle: cycle };
-        log(`${ICONS.user} Compte ${i + 1}: ${accCfg.sessionName || 'session'}`);
+        log(`${ICONS.user} Account ${i + 1}: ${accCfg.sessionName || 'session'}`);
         await runAccount(accCfg);
-        // Attente uniforme entre chaque exécution, y compris avant de reboucler
-        log(`${ICONS.time} Attente ${formatDelay(delayMs)} avant le prochain passage`);
-        await waitDelayWithProgress(delayMs, `cycle ${cycle} → attente`);
+        // Uniform wait between each execution, including before next cycle
+        log(`${ICONS.time} Waiting ${formatDelay(delayMs)} before next pass`);
+        await waitDelayWithProgress(delayMs, `cycle ${cycle} → waiting`);
       }
 
-      console.log(createSeparator(`FIN CYCLE #${cycle}`, 'cycle'));
+      console.log(createSeparator(`END CYCLE #${cycle}`, 'cycle'));
       cycle += 1;
       if (maxCycles && cycle > maxCycles) {
-        console.log(createSeparator('TERMINÉ', 'thick'));
-        log(`${ICONS.success} Nombre maximal de cycles atteint. Fin.`);
+        console.log(createSeparator('DONE', 'thick'));
+        log(`${ICONS.success} Reached maximum cycles. End.`);
         break;
       }
     }
@@ -738,9 +738,9 @@ async function detectExistingSession(page, cfg) {
 
   if (!loopEnabled) {
     if (cfg.keepAliveMs && cfg.keepAliveMs > 0) {
-      log(`[keepAlive] Maintien du processus ouvert pendant ${formatDelay(cfg.keepAliveMs)} (les navigateurs resteront ouverts).`);
+      log(`[keepAlive] Keeping process alive for ${formatDelay(cfg.keepAliveMs)} (browsers will remain open).`);
       await sleep(cfg.keepAliveMs);
-      log('[keepAlive] Fin de la période de maintien.');
+      log('[keepAlive] End of keep-alive period.');
     }
   }
 })();
