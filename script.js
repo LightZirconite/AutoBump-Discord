@@ -818,6 +818,15 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
   const delayMs = (typeof loopCfg.delayMs === 'number')
     ? loopCfg.delayMs
     : (loopCfg.delayBetweenAccountsMs ?? cfg.secondUserDelayMs ?? 3600000); // compat
+  // Add a random jitter on top of the base delay to avoid predictable schedules
+  // Default jitter max: 30 minutes if not specified
+  const jitterMaxMs = Math.max(0, loopCfg.jitterMsMax ?? loopCfg.randomJitterMsMax ?? (loopEnabled ? 30 * 60 * 1000 : 0));
+  const computeJitteredDelay = () => {
+    if (!jitterMaxMs) return { total: delayMs, jitter: 0 };
+    const jitter = Math.floor(Math.random() * (jitterMaxMs + 1));
+    return { total: delayMs + jitter, jitter };
+  };
+  const perAccountSchedule = !!(loopCfg.perAccountSchedule || loopCfg.scheduleMode === 'per-account');
   const maxCycles = loopCfg.maxCycles ?? null; // null = infini
 
   // Loop & accounts summary
@@ -839,13 +848,18 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       await runAccount(accCfg);
       const isLast = i === normalizedAccounts.length - 1;
       if (!isLast && delayMs > 0) {
-        log(`${ICONS.time} Waiting ${formatDelay(delayMs)} before next account`);
-        await waitDelayWithProgress(delayMs, 'before next account');
+        const { total, jitter } = computeJitteredDelay();
+        if (jitter > 0) {
+          log(`${ICONS.time} Waiting ${formatDelay(total)} before next account (+${formatDelay(jitter)} random)`);
+        } else {
+          log(`${ICONS.time} Waiting ${formatDelay(total)} before next account`);
+        }
+        await waitDelayWithProgress(total, 'before next account');
       }
     }
     console.log(createSeparator('DONE', 'thick'));
     log(`${ICONS.success} All accounts processed (non-loop mode).`);
-  } else {
+  } else if (!perAccountSchedule) {
     let cycle = 1;
     while (true) {
       console.log(createSeparator(`CYCLE #${cycle}`, 'cycle'));
@@ -858,8 +872,13 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
         log(`${ICONS.user} Account ${i + 1}: ${accCfg.sessionName || 'session'}`);
         await runAccount(accCfg);
         // Uniform wait between each execution, including before next cycle
-        log(`${ICONS.time} Waiting ${formatDelay(delayMs)} before next pass`);
-        await waitDelayWithProgress(delayMs, `cycle ${cycle} → waiting`);
+        const { total, jitter } = computeJitteredDelay();
+        if (jitter > 0) {
+          log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass (+${formatDelay(jitter)} random)`);
+        } else {
+          log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass`);
+        }
+        await waitDelayWithProgress(total, `cycle ${cycle} → waiting`);
       }
 
       console.log(createSeparator(`END CYCLE #${cycle}`, 'cycle'));
@@ -867,6 +886,51 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       if (maxCycles && cycle > maxCycles) {
         console.log(createSeparator('DONE', 'thick'));
         log(`${ICONS.success} Reached maximum cycles. End.`);
+        break;
+      }
+    }
+  } else {
+    // Per-account scheduler: maximize bumps/day by scheduling each account independently
+    const baseCooldownMs = (typeof loopCfg.cooldownMsBase === 'number')
+      ? loopCfg.cooldownMsBase
+      : (typeof delayMs === 'number' ? delayMs : 2 * 60 * 60 * 1000); // default 2h if unspecified
+    const jitterMax = Math.max(0, loopCfg.jitterMsMax ?? loopCfg.randomJitterMsMax ?? 30 * 60 * 1000);
+
+    function computeNextDelay() {
+      const jitter = jitterMax ? Math.floor(Math.random() * (jitterMax + 1)) : 0;
+      return { total: baseCooldownMs + jitter, jitter };
+    }
+
+    const now = Date.now();
+    const schedule = normalizedAccounts.map((acc) => ({ cfg: { ...acc }, nextAt: now }));
+    let runCount = 0;
+    const maxRuns = typeof loopCfg.maxRuns === 'number' ? loopCfg.maxRuns : null; // optional global cap
+
+    while (true) {
+      // Find the next due account
+      schedule.sort((a, b) => a.nextAt - b.nextAt);
+      const next = schedule[0];
+      const waitMs = Math.max(0, next.nextAt - Date.now());
+      if (waitMs > 0) {
+        const label = `until ${next.cfg.sessionName || 'session'} next run`;
+        log(`${ICONS.time} Waiting ${formatDelay(waitMs)} ${jitterMax ? '(with randomization per account)' : ''}`);
+        await waitDelayWithProgress(waitMs, label);
+      }
+
+      // Run the due account
+      log(`${ICONS.user} Account: ${next.cfg.sessionName || 'session'}`);
+      await runAccount({ ...next.cfg });
+      runCount += 1;
+
+      // Schedule its next run
+      const { total, jitter } = computeNextDelay();
+      next.nextAt = Date.now() + total;
+      const jitterInfo = jitter ? ` (+${formatDelay(jitter)} random)` : '';
+      log(`${ICONS.time} Next for ${next.cfg.sessionName || 'session'} in ${formatDelay(total)}${jitterInfo}`);
+
+      if (maxRuns && runCount >= maxRuns) {
+        console.log(createSeparator('DONE', 'thick'));
+        log(`${ICONS.success} Reached max runs (${maxRuns}). End.`);
         break;
       }
     }

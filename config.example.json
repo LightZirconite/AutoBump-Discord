@@ -6,7 +6,10 @@
   "loop": {
     "enabled": true,
     "delayMs": 3600000,
-    "maxCycles": null
+    "maxCycles": null,
+    "jitterMsMax": 1800000,
+    "perAccountSchedule": false,
+    "cooldownMsBase": 7200000
   },
   "ui": {
     "inlineProgress": true,
@@ -14,7 +17,7 @@
   },
   "auth": {
     "resetSessionOnStart": false,
-  "chooseAccountStrategy": "connect",
+    "chooseAccountStrategy": "auto",
     "chooseAccountTimeoutMs": 8000
   },
   "accounts": [
