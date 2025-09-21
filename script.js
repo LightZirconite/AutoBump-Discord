@@ -12,6 +12,29 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 
+// Inline progress UI (module-scope so all functions can use it)
+let UI = { inlineProgress: true, spinner: true };
+const isTTY = !!process.stdout.isTTY;
+const spinnerFrames = process.platform === 'win32'
+  ? ['|','/','-','\\']
+  : ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+let spinnerIdx = 0;
+function nextSpinner() {
+  const f = spinnerFrames[spinnerIdx % spinnerFrames.length];
+  spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
+  return f;
+}
+function writeInline(text) {
+  if (!(UI.inlineProgress && isTTY)) return;
+  readline.clearLine(process.stdout, 0);
+  readline.cursorTo(process.stdout, 0);
+  process.stdout.write(text);
+}
+function endInline() {
+  if (!(UI.inlineProgress && isTTY)) return;
+  process.stdout.write('\n');
+}
+
 // Simplified flow: sequential login + sending /bump
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let LOG_MINIMAL = false;
@@ -478,11 +501,22 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
   } catch { return; }
   log('[Auth] "Choose an account" screen detected');
   if (strategy === 'add') {
-    // Click "Ajouter un compte"
+    // Click the button with class text__7a01b ("Ajouter un compte" in FR but class is stable)
     const clicked = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button, [role="button"], .textButton__7a01b'));
-      const add = btns.find(b => /ajouter un compte/i.test(b.textContent || ''));
-      if (add) { add.dispatchEvent(new MouseEvent('click', { bubbles:true })); return true; }
+      const candidates = Array.from(document.querySelectorAll('button.textButton__7a01b, .textButton__7a01b, .actions_df9c06 button, [data-mana-component="text-button"]'));
+      for (const el of candidates) {
+        // Heuristic: small text button under actions
+        const inActions = el.closest('.actions_df9c06');
+        if (inActions) {
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          return true;
+        }
+        // Fallback: any element with class text__7a01b
+        if (el.classList.contains('text__7a01b')) {
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          return true;
+        }
+      }
       return false;
     });
     log(clicked ? '[Auth] Clicked "Ajouter un compte"' : '[Auth] Could not click "Ajouter un compte"');
@@ -493,10 +527,10 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
     const cards = Array.from(document.querySelectorAll('.accountCard__920b8'));
     if (!cards.length) return false;
     const card = cards[0];
-    const btn = card.querySelector('button');
-    // Prefer the button that contains "Connexion"
+    // Buttons inside the card (first is often "Connexion")
     const buttons = Array.from(card.querySelectorAll('button, [role="button"]'));
-    let connect = buttons.find(b => /connexion/i.test(b.textContent || '')) || btn;
+    let connect = buttons.find(b => b && b.textContent && b.textContent.trim().length > 0) || buttons[0];
+    if (!connect) connect = card.querySelector('button');
     if (connect) { connect.dispatchEvent(new MouseEvent('click', { bubbles:true })); return true; }
     return false;
   });
@@ -508,6 +542,9 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
   // Logging: nouveau schéma (cfg.logging) avec compat ancienne clé
   LOG_MINIMAL = !!(cfg.logging?.minimal ?? cfg.minimalLogs);
   LOG_COLORED = !!(cfg.logging?.colored ?? cfg.coloredLogs);
+  // Configure UI inline/spinner from cfg
+  UI.inlineProgress = cfg.ui?.inlineProgress ?? true;
+  UI.spinner = cfg.ui?.spinner ?? true;
   const UI = {
     inlineProgress: cfg.ui?.inlineProgress ?? true,
     spinner: cfg.ui?.spinner ?? true
