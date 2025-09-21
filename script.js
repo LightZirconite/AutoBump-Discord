@@ -549,14 +549,39 @@ async function detectExistingSession(page, cfg) {
 
     async function findLocalChromeWindows() {
       const env = process.env;
+      // Prefer Edge first, then Chrome
       const candidates = [
+        // Edge stable/insiders
+        path.join(env["PROGRAMFILES"] || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Microsoft', 'Edge SxS', 'Application', 'msedge.exe') : null,
+        // Chrome
         path.join(env["PROGRAMFILES"] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
         path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Google', 'Chrome', 'Application', 'chrome.exe') : null,
-        path.join(env["PROGRAMFILES"] || 'C\\\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-        path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Microsoft', 'Edge SxS', 'Application', 'msedge.exe') : null
+        env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Google', 'Chrome', 'Application', 'chrome.exe') : null
       ].filter(Boolean);
+      for (const c of candidates) { if (await fileExists(c)) return c; }
+      return null;
+    }
+
+    async function findLocalChromeLinux() {
+      const candidates = [
+        '/usr/bin/microsoft-edge',
+        '/opt/microsoft/msedge/msedge',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable'
+      ];
+      for (const c of candidates) { if (await fileExists(c)) return c; }
+      return null;
+    }
+
+    async function findLocalChromeDarwin() {
+      const candidates = [
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+      ];
       for (const c of candidates) { if (await fileExists(c)) return c; }
       return null;
     }
@@ -566,18 +591,25 @@ async function detectExistingSession(page, cfg) {
       const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
       if (fromEnv && await fileExists(fromEnv)) return fromEnv;
 
-      // Priority 2: Puppeteer's downloaded browser
+      // Priority 2: System installations (prefer Edge), per platform
+      if (process.platform === 'win32') {
+        const winBrowser = await findLocalChromeWindows();
+        if (winBrowser) return winBrowser;
+      } else if (process.platform === 'linux') {
+        const linBrowser = await findLocalChromeLinux();
+        if (linBrowser) return linBrowser;
+      } else if (process.platform === 'darwin') {
+        const macBrowser = await findLocalChromeDarwin();
+        if (macBrowser) return macBrowser;
+      }
+
+      // Priority 3: Puppeteer's downloaded browser
       try {
         const p = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
         if (p && await fileExists(p)) return p;
       } catch {}
 
-      // Priority 3: System installations (Windows only for now)
-      if (process.platform === 'win32') {
-        const winChrome = await findLocalChromeWindows();
-        if (winChrome) return winChrome;
-      }
-      return null; // let Puppeteer decide
+      return null; // let Puppeteer decide/run default
     }
 
     const headlessMode = (() => {
