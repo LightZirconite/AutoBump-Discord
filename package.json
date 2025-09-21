@@ -1,0 +1,13 @@
+{
+  "name": "discord-bump",
+  "version": "1.0.0",
+  "description": "Auto‑bump a Discord channel via script",
+  "type": "module",
+  "main": "script.js",
+  "scripts": {
+    "start": "node script.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.11.1"
+  }
+}

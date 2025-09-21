@@ -1,0 +1,29 @@
+{
+  "logging": {
+    "minimal": false,
+    "colored": false
+  },
+  "loop": {
+    "enabled": true,
+    "delayMs": 3600000,
+    "maxCycles": null
+  },
+  "accounts": [
+    {
+      "email": "",
+      "password": "",
+      "sessionName": "",
+      "channelUrl": "",
+      "webhookUrl": "",
+      "enableSecurityAction": true
+    },
+    {
+      "email": "",
+      "password": "",
+      "sessionName": "",
+      "channelUrl": "",
+      "webhookUrl": "",
+      "enableSecurityAction": true
+    }
+  ]
+}
