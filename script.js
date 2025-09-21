@@ -446,50 +446,27 @@ async function postWebhookEmbed(url, { title, description, color = 5793266, fiel
   return postWebhook(url, { event: title || 'info', message: description || '', embedOnly: true, _meta: Object.fromEntries(fields.map(f => [f.name || 'field', f.value])) });
 }
 
-// New detection: open /login first and observe URL for ~20s.
-// If after observation the URL is no longer /login => already signed in.
-// Else => not signed in, manual/simple login is needed.
-async function detectExistingSession(page, cfg) {
+// Stabilize startup to let the browser/session load
+async function stabilize(page, cfg) {
   const startup = cfg.startup || {};
-  const stabilizationMs = startup.stabilizationMs ?? 30000; // let the browser load session
-  const detectTotal = startup.loginDetectWaitMs ?? 20000; // observation after stabilization
-  const step = startup.loginDetectProgressStepMs ?? 5000;
-
+  const stabilizationMs = startup.stabilizationMs ?? 30000;
   log(`Browser startup stabilization ${stabilizationMs}ms`);
   await sleep(stabilizationMs);
-  log('Start observing URL to determine session state');
+}
+
+// Quick login-state detection: small window to see if URL leaves /login
+async function detectLoggedQuick(page, timeoutMs = 2000) {
   const t0 = Date.now();
-  let lastPoke = 0;
-  let lastPath = '';
-  while (Date.now() - t0 < detectTotal) {
-    // Proactively handle the choose-account screen while we observe
-    if (Date.now() - lastPoke > 1000) {
-      try {
-        await pokeChooseAccountIfVisible(page, cfg);
-      } catch {}
-      lastPoke = Date.now();
-    }
+  while (Date.now() - t0 < timeoutMs) {
     const u = page.url();
-    try { lastPath = new URL(u).pathname; } catch { lastPath = u; }
-    if (!(/\/login(\b|$)/.test(lastPath))) {
-      log(`URL left /login -> session active (${lastPath})`);
+    let path;
+    try { path = new URL(u).pathname; } catch { path = u; }
+    if (!(/\/login(\b|$)/.test(path))) {
+      log(`URL left /login -> session active (${path})`);
       return { logged: true };
     }
-    const elapsed = Date.now() - t0;
-    if (elapsed > 0 && elapsed % step < 500) {
-      const secs = Math.floor(elapsed/1000);
-      const totalSecs = Math.floor(detectTotal/1000);
-      const spin = UI.spinner ? ` ${nextSpinner()}` : '';
-      if (UI.inlineProgress && isTTY) {
-        writeInline(`${ICONS.loading} Observation: ${secs}s / ${totalSecs}s (still on /login)${spin}`);
-      } else {
-        log(`Observation: ${secs}s / ${totalSecs}s (still on /login)`);
-      }
-    }
-    await sleep(500);
+    await sleep(200);
   }
-  if (UI.inlineProgress && isTTY) endInline();
-  log('Observation finished: still on /login -> not signed in');
   return { logged: false };
 }
 
@@ -502,7 +479,8 @@ async function detectExistingSession(page, cfg) {
 async function handleChooseAccountIfPresent(page, accountCfg) {
   // Merge global auth (from runAccount) and account-specific auth
   const auth = { ...(accountCfg.__globalAuth || {}), ...(accountCfg.auth || {}) };
-  const strategy = auth.chooseAccountStrategy || 'connect';
+  // Default to 'auto': click "Ajouter un compte" if present, otherwise click first account "Connexion"
+  const strategy = auth.chooseAccountStrategy || 'auto';
   const waitMs = auth.chooseAccountTimeoutMs ?? 8000;
   // Be resilient to hashed class names by using contains selectors
   const rootSelector = 'section[class*="chooseAccountAuthBox_"]';
@@ -510,7 +488,7 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
     await page.waitForSelector(rootSelector, { timeout: waitMs });
   } catch { return; }
   log('[Auth] "Choose an account" screen detected');
-  if (strategy === 'add') {
+  if (strategy === 'add' || strategy === 'auto') {
     // Click the small text button under the actions area (language-agnostic, class-based)
     const clicked = await page.evaluate(() => {
       const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
@@ -528,7 +506,7 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
       return false;
     });
     log(clicked ? '[Auth] Clicked "Ajouter un compte"' : '[Auth] Could not click "Ajouter un compte"');
-    return;
+    if (clicked || strategy === 'add') return;
   }
   // Default: click the "Connexion" button of the first account card
   const done = await page.evaluate(() => {
@@ -548,11 +526,11 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
 // Lightweight, non-blocking choose-account handler used during observation
 async function pokeChooseAccountIfVisible(page, accountCfg) {
   const auth = { ...(accountCfg.__globalAuth || {}), ...(accountCfg.auth || {}) };
-  const strategy = auth.chooseAccountStrategy || 'connect';
+  const strategy = auth.chooseAccountStrategy || 'auto';
   // Only act if we're on /login to avoid accidental clicks elsewhere
   const path = (() => { try { return new URL(page.url()).pathname; } catch { return page.url(); } })();
   if (!/\/login(\b|$)/.test(path)) return false;
-  if (strategy === 'add') {
+  if (strategy === 'add' || strategy === 'auto') {
     const clicked = await page.evaluate(() => {
       const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
       if (!root) return false;
@@ -561,8 +539,9 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       return false;
     });
     if (clicked) log('[Auth] Poke: clicked "Ajouter un compte"');
-    return clicked;
-  } else {
+    if (clicked || strategy === 'add') return clicked;
+  }
+  {
     const done = await page.evaluate(() => {
       const root = document.querySelector('section[class*="chooseAccountAuthBox_"]');
       if (!root) return false;
@@ -789,14 +768,15 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
       // Enrich with global auth options to be used by choose-account logic
       const mergedCfg = { ...accountCfg, __globalAuth: (cfg.auth || {}) };
-      // Immediately try to resolve the choose-account screen if visible
-      try { await pokeChooseAccountIfVisible(page, mergedCfg); } catch {}
-      // Then handle it with a short, blocking wait in case it appears right after DOMContentLoaded
+      // 1) Stabilize first
+      await stabilize(page, mergedCfg);
+      // 2) Handle choose-account (auto: try add, otherwise connect)
       await handleChooseAccountIfPresent(page, mergedCfg).catch(() => {});
-      // Observe login state with periodic pokes
-      const detect = await detectExistingSession(page, mergedCfg);
-      if (!detect.logged) {
-        // If still on /login, run simple login
+      // 3) Quick check: already logged after possible redirect?
+      const quick = await detectLoggedQuick(page, 2000);
+      if (!quick.logged) {
+        // 4) Not logged: poke once more and run simple login
+        try { await pokeChooseAccountIfVisible(page, mergedCfg); } catch {}
         await simpleLogin(page, mergedCfg, { skipGoto: true, skipInitialWait: true });
       }
       await simpleBump(page, mergedCfg);
