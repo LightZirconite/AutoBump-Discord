@@ -542,13 +542,14 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
   // Logging: nouveau schéma (cfg.logging) avec compat ancienne clé
   LOG_MINIMAL = !!(cfg.logging?.minimal ?? cfg.minimalLogs);
   LOG_COLORED = !!(cfg.logging?.colored ?? cfg.coloredLogs);
-  // Configure UI inline/spinner from cfg
-  UI.inlineProgress = cfg.ui?.inlineProgress ?? true;
-  UI.spinner = cfg.ui?.spinner ?? true;
-  const UI = {
-    inlineProgress: cfg.ui?.inlineProgress ?? true,
-    spinner: cfg.ui?.spinner ?? true
-  };
+  // Configure UI inline/spinner from cfg (guard against TDZ by using globalThis)
+  {
+    const u = (globalThis.UI ||= { inlineProgress: true, spinner: true });
+    u.inlineProgress = cfg.ui?.inlineProgress ?? true;
+    u.spinner = cfg.ui?.spinner ?? true;
+    try { UI.inlineProgress = u.inlineProgress; UI.spinner = u.spinner; } catch {}
+  }
+  // UI configuration is now applied to module-scope UI only (no redeclaration here)
   
   console.log(createSeparator('BUMP SCRIPT START', 'thick'));
   log(`${ICONS.progress} Script initialization`);
@@ -587,27 +588,7 @@ async function handleChooseAccountIfPresent(page, accountCfg) {
     return `${min} min ${rem} s`;
   }
 
-  // Inline progress utilities (single-line updates)
-  const isTTY = !!process.stdout.isTTY;
-  const spinnerFrames = process.platform === 'win32'
-    ? ['|','/','-','\\']
-    : ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-  let spinnerIdx = 0;
-  function nextSpinner() {
-    const f = spinnerFrames[spinnerIdx % spinnerFrames.length];
-    spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
-    return f;
-  }
-  function writeInline(text) {
-    if (!(UI.inlineProgress && isTTY)) return;
-    readline.clearLine(process.stdout, 0);
-    readline.cursorTo(process.stdout, 0);
-    process.stdout.write(text);
-  }
-  function endInline() {
-    if (!(UI.inlineProgress && isTTY)) return;
-    process.stdout.write('\n');
-  }
+  // Inline progress utilities are defined at module scope; use them directly
 
   async function waitDelayWithProgress(totalMs, label = 'waiting') {
     if (totalMs <= 0) return; // nothing
