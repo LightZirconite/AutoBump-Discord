@@ -69,6 +69,8 @@ const ICONS = {
   progress: '▶️'
 };
 
+const browserPool = new Map();
+
 const COLORS = { 
   reset: '\x1b[0m', 
   bold: '\x1b[1m', 
@@ -449,6 +451,38 @@ async function postWebhookEmbed(url, { title, description, color = 5793266, fiel
   return postWebhook(url, { event: title || 'info', message: description || '', embedOnly: true, _meta: Object.fromEntries(fields.map(f => [f.name || 'field', f.value])) });
 }
 
+function getBrowserEntry(key) {
+  const entry = browserPool.get(key);
+  if (!entry) return null;
+  const browser = entry.browser;
+  if (!browser || (typeof browser.isConnected === 'function' && !browser.isConnected())) {
+    browserPool.delete(key);
+    return null;
+  }
+  if (entry.page && typeof entry.page.isClosed === 'function' && entry.page.isClosed()) {
+    entry.page = null;
+  }
+  return entry;
+}
+
+function rememberBrowserEntry(key, entry) {
+  browserPool.set(key, entry);
+  if (!entry._disconnectHandler && entry.browser && typeof entry.browser.once === 'function') {
+    entry._disconnectHandler = () => browserPool.delete(key);
+    entry.browser.once('disconnected', entry._disconnectHandler);
+  }
+  return entry;
+}
+
+async function shutdownAllBrowsers() {
+  for (const [key, entry] of browserPool.entries()) {
+    try {
+      if (entry?.browser) await entry.browser.close();
+    } catch {}
+    browserPool.delete(key);
+  }
+}
+
 // Stabilize startup to let the browser/session load
 async function stabilize(page, cfg) {
   const startup = cfg.startup || {};
@@ -578,6 +612,16 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
   log(`${ICONS.progress} Script initialization`);
   console.log(createSeparator('', 'single'));
 
+  const gracefulStop = (signal) => {
+    log(`${ICONS.warning} Received ${signal}, closing browsers...`);
+    shutdownAllBrowsers().finally(() => process.exit(0));
+  };
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    if (!process.listenerCount(sig)) {
+      process.once(sig, () => gracefulStop(sig));
+    }
+  }
+
   // Display helpers
   function createSeparator(title = '', type = 'double') {
     const width = 60;
@@ -650,12 +694,23 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     const sessionRoot = path.join(process.cwd(), 'sessions');
     try { await fs.mkdir(sessionRoot, { recursive: true }); } catch {}
     const sessionName = (accountCfg.sessionName || 'default-session').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sessionKey = sessionName;
     const userDataDir = path.join(sessionRoot, sessionName);
-    // Optional: reset session folder before launching (fresh profile)
-    if (accountCfg.resetSessionOnStart || (typeof accountCfg.resetSessionOnStart === 'undefined' && cfg.auth?.resetSessionOnStart)) {
+    const runtimeCfg = cfg.runtime || {};
+    const reuseBrowser = accountCfg.reuseBrowser ?? runtimeCfg.reuseBrowser ?? true;
+
+    const globalReset = cfg.auth?.resetSessionOnStart;
+    const shouldResetSession = accountCfg.resetSessionOnStart || (typeof accountCfg.resetSessionOnStart === 'undefined' && globalReset);
+    let poolEntry = reuseBrowser ? getBrowserEntry(sessionKey) : null;
+    if (shouldResetSession) {
+      if (poolEntry?.browser) {
+        try { await poolEntry.browser.close(); } catch {}
+        browserPool.delete(sessionKey);
+        poolEntry = null;
+      }
       try { await fs.rm(userDataDir, { recursive: true, force: true }); } catch {}
     }
-    log(`[${sessionName}] Opening browser`);
+
     const extraArgs = [
       '--window-size=1200,900',
       '--no-first-run',
@@ -665,7 +720,6 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       '--disable-infobars'
     ];
 
-    // Cross-platform launch resolution: choose executablePath if needed and safe headless on Linux/WSL without display.
     function isWSL() {
       return process.platform === 'linux' && /microsoft/i.test(os.release());
     }
@@ -676,13 +730,10 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
 
     async function findLocalChromeWindows() {
       const env = process.env;
-      // Prefer Edge first, then Chrome
       const candidates = [
-        // Edge stable/insiders
         path.join(env["PROGRAMFILES"] || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
         path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
         env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Microsoft', 'Edge SxS', 'Application', 'msedge.exe') : null,
-        // Chrome
         path.join(env["PROGRAMFILES"] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
         path.join(env["PROGRAMFILES(X86)"] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
         env["LOCALAPPDATA"] ? path.join(env["LOCALAPPDATA"], 'Google', 'Chrome', 'Application', 'chrome.exe') : null
@@ -714,11 +765,9 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     }
 
     async function resolveExecutablePath() {
-      // Priority 1: explicit env
       const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
       if (fromEnv && await fileExists(fromEnv)) return fromEnv;
 
-      // Priority 2: System installations (prefer Edge), per platform
       if (process.platform === 'win32') {
         const winBrowser = await findLocalChromeWindows();
         if (winBrowser) return winBrowser;
@@ -730,19 +779,17 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
         if (macBrowser) return macBrowser;
       }
 
-      // Priority 3: Puppeteer's downloaded browser
       try {
         const p = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
         if (p && await fileExists(p)) return p;
       } catch {}
 
-      return null; // let Puppeteer decide/run default
+      return null;
     }
 
     const headlessMode = (() => {
       if (typeof accountCfg.headless !== 'undefined') return accountCfg.headless;
       if (process.platform === 'linux' || isWSL()) {
-        // In Linux/WSL, default to headless if no GUI/display; Puppeteer v22 supports 'new'
         return process.env.DISPLAY ? false : 'new';
       }
       return false;
@@ -752,49 +799,126 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     const launchOptions = { headless: headlessMode, defaultViewport: null, userDataDir, args: extraArgs };
     if (execPath) launchOptions.executablePath = execPath;
 
-  const browser = await puppeteer.launch(launchOptions);
-    // Réutiliser la première page si elle existe (évite about:blank supplémentaire)
-    let pages = await browser.pages();
-    let page = pages[0];
-    if (!page) {
-      page = await browser.newPage();
-    }
-    // Nettoyer pages about:blank supplémentaires (optionnel)
-    const cleanup = accountCfg.cleanupBlankPages !== false; // défaut true
-    if (cleanup) {
-      for (const p of pages.slice(1)) {
-        try { if ((p.url() || '').startsWith('about:blank')) await p.close(); } catch {}
+    let browser;
+    let page;
+    if (poolEntry?.browser) {
+      browser = poolEntry.browser;
+      const maybePage = poolEntry.page;
+      if (maybePage && typeof maybePage.isClosed === 'function' && !maybePage.isClosed()) {
+        page = maybePage;
       }
-    }
-    try {
-      log(`${ICONS.browser} [${sessionName}] Initial access to login page`);
-      await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
-      // Enrich with global auth options to be used by choose-account logic
-      const mergedCfg = { ...accountCfg, __globalAuth: (cfg.auth || {}) };
-      // 1) Stabilize first
-      await stabilize(page, mergedCfg);
-      // 2) Handle choose-account (auto: try add, otherwise connect)
-      await handleChooseAccountIfPresent(page, mergedCfg).catch(() => {});
-      // 3) Quick check: already logged after possible redirect?
-      const quick = await detectLoggedQuick(page, 2000);
-      if (!quick.logged) {
-        // 4) Not logged: poke once more and run simple login
-        try { await pokeChooseAccountIfVisible(page, mergedCfg); } catch {}
-        await simpleLogin(page, mergedCfg, { skipGoto: true, skipInitialWait: true });
-      }
-      await simpleBump(page, mergedCfg);
-      log(`${ICONS.success} [${sessionName}] Done.`);
-    } catch (e) {
-      console.error(`${ICONS.error} [${sessionName}] Error:`, e.message);
-      if (accountCfg.webhookUrl) {
-        await postWebhook(accountCfg.webhookUrl, { event: 'error', message: e.message || 'Unknown error', _meta: { session: accountCfg.sessionName || sessionName } });
-      }
-    }
-    const close = accountCfg.closeBrowserOnFinish !== false; // par défaut on ferme
-    if (close) {
-      try { await browser.close(); log(`${ICONS.success} [${sessionName}] Browser closed (closeBrowserOnFinish).`); } catch {}
+      log(`${ICONS.browser} [${sessionName}] Reusing existing browser instance`);
     } else {
-      log(`${ICONS.info} [${sessionName}] Browser left open (closeBrowserOnFinish=false).`);
+      log(`[${sessionName}] Opening browser`);
+      browser = await puppeteer.launch(launchOptions);
+      if (reuseBrowser) {
+        poolEntry = rememberBrowserEntry(sessionKey, { browser, page: null, loggedIn: false, initialized: false });
+      }
+    }
+
+    if (!page) {
+      const pages = await browser.pages();
+      page = pages.find(p => !(typeof p.isClosed === 'function' && p.isClosed())) || await browser.newPage();
+    }
+
+    if (reuseBrowser && poolEntry) {
+      poolEntry.page = page;
+    }
+
+    if (accountCfg.cleanupBlankPages !== false) {
+      const openPages = await browser.pages();
+      for (const extraPage of openPages) {
+        if (extraPage === page) continue;
+        try {
+          if ((extraPage.url() || '').startsWith('about:blank')) await extraPage.close();
+        } catch {}
+      }
+    }
+
+    const mergedCfg = { ...accountCfg, __globalAuth: (cfg.auth || {}) };
+
+    const initializeIfNeeded = async () => {
+      if (!reuseBrowser || !poolEntry) {
+        await stabilize(page, mergedCfg);
+        return;
+      }
+      if (!poolEntry.initialized) {
+        await stabilize(page, mergedCfg);
+        poolEntry.initialized = true;
+      }
+    };
+
+    const performLoginFlow = async () => {
+      log(`${ICONS.browser} [${sessionName}] Navigating to login page`);
+      await page.goto('https://discord.com/login', { waitUntil: 'domcontentloaded' });
+      await initializeIfNeeded();
+      await handleChooseAccountIfPresent(page, mergedCfg).catch(() => {});
+      const quick = await detectLoggedQuick(page, 2000);
+      if (quick.logged) {
+        if (poolEntry) poolEntry.loggedIn = true;
+        return true;
+      }
+      try { await pokeChooseAccountIfVisible(page, mergedCfg); } catch {}
+      const logged = await simpleLogin(page, mergedCfg, { skipGoto: true, skipInitialWait: true });
+      if (logged && poolEntry) poolEntry.loggedIn = true;
+      return logged;
+    };
+
+    const notifyError = async (message) => {
+      if (accountCfg.webhookUrl) {
+        await postWebhook(accountCfg.webhookUrl, { event: 'error', message, _meta: { session: accountCfg.sessionName || sessionName } });
+      }
+    };
+
+    let needsLogin = !reuseBrowser || !poolEntry || !poolEntry.loggedIn;
+    let attempts = 0;
+    let bumpSuccess = false;
+    while (attempts < 2 && !bumpSuccess) {
+      attempts += 1;
+      if (needsLogin) {
+        try {
+          await performLoginFlow();
+          needsLogin = false;
+        } catch (loginErr) {
+          const loginMsg = loginErr?.message || String(loginErr);
+          console.error(`${ICONS.error} [${sessionName}] Login error:`, loginMsg);
+          await notifyError(loginMsg);
+          break;
+        }
+      } else {
+        log(`${ICONS.connected} [${sessionName}] Using existing authenticated session`);
+      }
+
+      try {
+        await simpleBump(page, mergedCfg);
+        bumpSuccess = true;
+        if (poolEntry) poolEntry.loggedIn = true;
+        log(`${ICONS.success} [${sessionName}] Done.`);
+      } catch (err) {
+        const errMsg = err?.message || String(err);
+        console.error(`${ICONS.error} [${sessionName}] Error:`, errMsg);
+        if (!needsLogin && attempts < 2) {
+          log(`${ICONS.warning} [${sessionName}] Bump failed, retrying with fresh login.`);
+          needsLogin = true;
+          continue;
+        }
+        await notifyError(errMsg);
+        break;
+      }
+    }
+
+    const shouldCloseBrowser = (() => {
+      if (!reuseBrowser) return accountCfg.closeBrowserOnFinish !== false;
+      if (typeof accountCfg.closeBrowserOnFinish === 'boolean') return accountCfg.closeBrowserOnFinish;
+      return false;
+    })();
+
+    if (shouldCloseBrowser) {
+      try { await browser.close(); log(`${ICONS.success} [${sessionName}] Browser closed.`); } catch {}
+      if (reuseBrowser) browserPool.delete(sessionKey);
+    } else if (reuseBrowser && poolEntry) {
+      try { await page.bringToFront(); } catch {}
+      log(`${ICONS.info} [${sessionName}] Browser kept open for reuse.`);
     }
   }
 

@@ -3,6 +3,9 @@
     "minimal": false,
     "colored": false
   },
+  "runtime": {
+    "reuseBrowser": true
+  },
   "loop": {
     "enabled": true,
     "delayMs": 3600000,
