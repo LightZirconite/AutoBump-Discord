@@ -696,12 +696,13 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     const sessionName = (accountCfg.sessionName || 'default-session').replace(/[^a-zA-Z0-9_-]/g, '_');
     const sessionKey = sessionName;
     const userDataDir = path.join(sessionRoot, sessionName);
-    const runtimeCfg = cfg.runtime || {};
-    const reuseBrowser = accountCfg.reuseBrowser ?? runtimeCfg.reuseBrowser ?? true;
+  const runtimeCfg = cfg.runtime || {};
+  const keepBrowserOpen = accountCfg.keepBrowserOpen ?? runtimeCfg.keepBrowserOpen ?? false;
+  const reuseBrowser = keepBrowserOpen && (accountCfg.reuseBrowser ?? runtimeCfg.reuseBrowser ?? true);
 
     const globalReset = cfg.auth?.resetSessionOnStart;
     const shouldResetSession = accountCfg.resetSessionOnStart || (typeof accountCfg.resetSessionOnStart === 'undefined' && globalReset);
-    let poolEntry = reuseBrowser ? getBrowserEntry(sessionKey) : null;
+  let poolEntry = reuseBrowser ? getBrowserEntry(sessionKey) : null;
     if (shouldResetSession) {
       if (poolEntry?.browser) {
         try { await poolEntry.browser.close(); } catch {}
@@ -907,16 +908,12 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       }
     }
 
-    const shouldCloseBrowser = (() => {
-      if (!reuseBrowser) return accountCfg.closeBrowserOnFinish !== false;
-      if (typeof accountCfg.closeBrowserOnFinish === 'boolean') return accountCfg.closeBrowserOnFinish;
-      return false;
-    })();
+    const shouldCloseBrowser = accountCfg.closeBrowserOnFinish ?? !keepBrowserOpen;
 
     if (shouldCloseBrowser) {
       try { await browser.close(); log(`${ICONS.success} [${sessionName}] Browser closed.`); } catch {}
       if (reuseBrowser) browserPool.delete(sessionKey);
-    } else if (reuseBrowser && poolEntry) {
+    } else if (keepBrowserOpen && reuseBrowser && poolEntry) {
       try { await page.bringToFront(); } catch {}
       log(`${ICONS.info} [${sessionName}] Browser kept open for reuse.`);
     }

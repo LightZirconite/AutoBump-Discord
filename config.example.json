@@ -4,7 +4,8 @@
     "colored": false
   },
   "runtime": {
-    "reuseBrowser": true
+    "reuseBrowser": true,
+    "keepBrowserOpen": false
   },
   "loop": {
     "enabled": true,
