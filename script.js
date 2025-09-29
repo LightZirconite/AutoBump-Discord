@@ -172,11 +172,19 @@ async function simpleLogin(page, cfg, opts = {}) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
-      const connected = await page.evaluate(() => {
-        return !!(document.querySelector('#app-mount [class*="sidebar"], #app-mount nav'));
-      });
-      if (connected) { log(`${ICONS.connected} Signed in.`); return true; }
-    } catch {}
+      const { active, state, disconnected } = await ensureSessionActive(page);
+      if (disconnected) {
+        log(`${ICONS.error} Discord connection lost (WebSocket or overlay detected)`);
+        throw new Error('Discord connection lost');
+      }
+      if (active) {
+        const hint = state.path && !/\/login(\b|$)/.test(state.path) ? state.path : 'session active';
+        log(`${ICONS.connected} Signed in (${hint}).`);
+        return true;
+      }
+    } catch (e) {
+      if (e.message && /connection lost/i.test(e.message)) throw e;
+    }
     await sleep(2000);
   }
   throw new Error('Login timeout');
@@ -190,6 +198,15 @@ async function simpleBump(page, cfg) {
   const afterChannel = d.afterChannelMs ?? (cfg.simpleDelays?.afterChannelMs ?? 5000);
   const finalizeAfterBumpsMs = d.finalizeAfterBumpsMs ?? 4000; // extra safety delay after sending the two bumps
   await sleep(afterChannel);
+
+  const { active: sessionActive, state: sessionState } = await ensureSessionActive(page);
+  if (!sessionActive) {
+    const currentUrl = page.url();
+    const reason = sessionState?.path && /\/login(\b|$)/.test(sessionState.path)
+      ? `navigated to login (${sessionState.path})`
+      : `current url ${currentUrl}`;
+    throw new Error(`Session inactive before sending bumps (${reason})`);
+  }
 
   // Optional security step
   if (cfg.enableSecurityAction !== false) {
@@ -491,15 +508,51 @@ async function stabilize(page, cfg) {
   await sleep(stabilizationMs);
 }
 
+async function readSessionState(page) {
+  try {
+    return await page.evaluate(() => {
+      const path = location?.pathname || '';
+      const isLoginPath = /\/login(\b|$)/.test(path);
+      const hasAppShell = !!document.querySelector('#app-mount [class*="sidebar"], #app-mount nav, [data-list-id="guildsnav"], nav[aria-label], [class*="guildsNav"]');
+      const isAuthSplitView = !!document.querySelector('section[class*="splitContainer"], section[class*="authBox"]');
+      return { path, isLoginPath, hasAppShell, isAuthSplitView };
+    });
+  } catch {
+    return { path: '', isLoginPath: false, hasAppShell: false, isAuthSplitView: false };
+  }
+}
+
+// Vérifie si la session Discord est active (sidebar présente ET pas de message d'erreur de déconnexion)
+async function ensureSessionActive(page) {
+  const state = await readSessionState(page);
+  // Vérifie la présence d'un message d'erreur de déconnexion
+  let disconnected = false;
+  try {
+    disconnected = await page.evaluate(() => {
+      // Discord affiche souvent un message "Reconnecting" ou "Connection lost"
+      const errorBanner = document.querySelector('[class*="connectionError"]') || document.querySelector('[class*="reconnect"]');
+      if (errorBanner && errorBanner.textContent) {
+        return /connect|reconnect|déconnecté|perdu/i.test(errorBanner.textContent);
+      }
+      // Certains overlays affichent "Lost connection" ou "Trying to reconnect"
+      const overlays = Array.from(document.querySelectorAll('div, span')).filter(e => e.textContent && /connect|reconnect|déconnecté|perdu/i.test(e.textContent));
+      return overlays.length > 0;
+    });
+  } catch {}
+  if (disconnected) return { active: false, state, disconnected: true };
+  if (!state.isLoginPath && state.hasAppShell) return { active: true, state };
+  if (!state.isLoginPath) return { active: true, state };
+  return { active: false, state };
+}
+
 // Quick login-state detection: small window to see if URL leaves /login
 async function detectLoggedQuick(page, timeoutMs = 2000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const u = page.url();
-    let path;
-    try { path = new URL(u).pathname; } catch { path = u; }
-    if (!(/\/login(\b|$)/.test(path))) {
-      log(`URL left /login -> session active (${path})`);
+    const { active, state } = await ensureSessionActive(page);
+    if (active) {
+      const hint = state.path || page.url();
+      log(`URL left /login -> session active (${hint})`);
       return { logged: true };
     }
     await sleep(200);
@@ -898,6 +951,15 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       } catch (err) {
         const errMsg = err?.message || String(err);
         console.error(`${ICONS.error} [${sessionName}] Error:`, errMsg);
+        // Si la session est perdue ou Discord est déconnecté, on force la suppression du dossier de session et la fermeture du navigateur
+        if (/connection lost|session inactive/i.test(errMsg)) {
+          log(`${ICONS.warning} [${sessionName}] Session/browser will be reset due to lost connection.`);
+          try { await browser.close(); } catch {}
+          try { await fs.rm(userDataDir, { recursive: true, force: true }); } catch {}
+          browserPool.delete(sessionKey);
+          needsLogin = true;
+          continue;
+        }
         if (!needsLogin && attempts < 2) {
           log(`${ICONS.warning} [${sessionName}] Bump failed, retrying with fresh login.`);
           needsLogin = true;
