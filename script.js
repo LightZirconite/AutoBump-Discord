@@ -872,7 +872,8 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     }
 
     const extraArgs = [
-      '--window-size=1920,1080',
+      '--window-size=1280,800',
+      '--window-position=100,50',
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-blink-features=AutomationControlled',
@@ -958,7 +959,7 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       headless: headlessMode, 
       channel: execPath ? undefined : 'msedge',
       args: extraArgs,
-      viewport: { width: 1920, height: 1080 },
+      viewport: { width: 1280, height: 800 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
       permissions: ['notifications'],
