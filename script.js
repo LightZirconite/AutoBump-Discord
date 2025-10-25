@@ -1280,19 +1280,33 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
         log(`${ICONS.user} Account ${i + 1}: ${accCfg.sessionName || 'session'}`);
         await runAccount(accCfg);
         
-        // Don't wait after the last account in the last cycle if maxCycles is reached
+        // Wait logic:
+        // - After first account: wait exactly 1h (no jitter)
+        // - After second account (and others): wait 1h to 1h30 (with jitter)
+        const isFirstAccount = i === 0;
         const isLastAccount = i === normalizedAccounts.length - 1;
         const isLastCycle = maxCycles && cycle >= maxCycles;
+        
+        // Don't wait after the last account if we've reached max cycles
         if (isLastCycle && isLastAccount) break;
         
-        // Wait calculation: uniform delay + jitter for all transitions
-        const { total, jitter } = computeJitteredDelay();
-        if (jitter > 0) {
-          log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass (+${formatDelay(jitter)} random)`);
+        let waitTime;
+        if (isFirstAccount && normalizedAccounts.length > 1) {
+          // After first account: exactly 1h
+          waitTime = delayMs;
+          log(`${ICONS.time} Waiting ${formatDelay(waitTime)} (fixed) before next account`);
         } else {
-          log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass`);
+          // After other accounts: 1h + random (0-30min)
+          const { total, jitter } = computeJitteredDelay();
+          waitTime = total;
+          if (jitter > 0) {
+            log(`${ICONS.time} Waiting ${formatDelay(total)} before next account (+${formatDelay(jitter)} random)`);
+          } else {
+            log(`${ICONS.time} Waiting ${formatDelay(total)} before next account`);
+          }
         }
-        await waitDelayWithProgress(total, `waiting before next account`);
+        
+        await waitDelayWithProgress(waitTime, `waiting before next account`);
       }
 
       console.log(createSeparator(`END CYCLE #${cycle}`, 'cycle'));
