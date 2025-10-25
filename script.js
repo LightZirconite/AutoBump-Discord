@@ -881,7 +881,11 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       '--disable-infobars',
       '--disable-features=IsolateOrigins',
       '--disable-site-isolation-trials',
-      '--enable-features=NetworkService,NetworkServiceInProcess'
+      '--enable-features=NetworkService,NetworkServiceInProcess',
+      '--disable-automation',
+      '--disable-infobars',
+      '--excludeSwitches=enable-automation',
+      '--disable-component-extensions-with-background-pages'
     ];
 
     function isWSL() {
@@ -965,6 +969,7 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       permissions: ['notifications'],
       colorScheme: 'dark',
       deviceScaleFactor: 1,
+      ignoreDefaultArgs: ['--enable-automation'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0'
     };
     if (execPath) launchOptions.executablePath = execPath;
