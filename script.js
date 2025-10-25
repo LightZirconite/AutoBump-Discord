@@ -883,9 +883,22 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       '--disable-site-isolation-trials',
       '--enable-features=NetworkService,NetworkServiceInProcess',
       '--disable-automation',
-      '--disable-infobars',
       '--excludeSwitches=enable-automation',
-      '--disable-component-extensions-with-background-pages'
+      '--disable-component-extensions-with-background-pages',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-features=TranslateUI',
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-sync',
+      '--force-color-profile=srgb',
+      '--metrics-recording-only',
+      '--enable-automation=false',
+      '--password-store=basic',
+      '--use-mock-keychain'
     ];
 
     function isWSL() {
@@ -969,8 +982,24 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       permissions: ['notifications'],
       colorScheme: 'dark',
       deviceScaleFactor: 1,
-      ignoreDefaultArgs: ['--enable-automation'],
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0'
+      ignoreDefaultArgs: [
+        '--enable-automation',
+        '--enable-blink-features=IdleDetection',
+        '--enable-logging'
+      ],
+      chromiumSandbox: true,
+      bypassCSP: false,
+      javaScriptEnabled: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+      extraHTTPHeaders: {
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Upgrade-Insecure-Requests': '1',
+        'sec-ch-ua': '"Microsoft Edge";v="130", "Chromium";v="130", "Not?A_Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+      }
     };
     if (execPath) launchOptions.executablePath = execPath;
 
@@ -998,13 +1027,14 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       const pages = context.pages();
       page = pages.find(p => !p.isClosed()) || await context.newPage();
       
-      // Anti-detection: override navigator.webdriver
+      // Comprehensive anti-detection script
       await page.addInitScript(() => {
+        // 1. Override navigator.webdriver
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined,
         });
         
-        // Mock chrome object for better detection avoidance
+        // 2. Mock chrome object
         window.chrome = {
           runtime: {},
           loadTimes: function() {},
@@ -1012,7 +1042,7 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
           app: {}
         };
         
-        // Prevent permission detection
+        // 3. Override permissions API
         const originalQuery = window.navigator.permissions.query;
         window.navigator.permissions.query = (parameters) => (
           parameters.name === 'notifications' ?
@@ -1020,13 +1050,89 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
             originalQuery(parameters)
         );
         
-        // Mock plugins
+        // 4. Mock plugins (realistic list)
         Object.defineProperty(navigator, 'plugins', {
-          get: () => [1, 2, 3, 4, 5],
+          get: () => [
+            { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
+            { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
+            { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' },
+            { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer' },
+            { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer' }
+          ],
         });
         
+        // 5. Languages
         Object.defineProperty(navigator, 'languages', {
           get: () => ['en-US', 'en'],
+        });
+        
+        // 6. Override Playwright-specific properties
+        delete navigator.__playwright;
+        delete navigator.__pw_manual;
+        delete navigator.__fxdriver_unwrapped;
+        delete window.callPhantom;
+        delete window._phantom;
+        
+        // 7. WebGL Vendor (not "Google Inc.")
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+          if (parameter === 37445) {
+            return 'Intel Inc.';
+          }
+          if (parameter === 37446) {
+            return 'Intel Iris OpenGL Engine';
+          }
+          return getParameter.call(this, parameter);
+        };
+        
+        // 8. Battery API (realistic)
+        if ('getBattery' in navigator) {
+          navigator.getBattery = () => Promise.resolve({
+            charging: true,
+            chargingTime: 0,
+            dischargingTime: Infinity,
+            level: 1,
+            addEventListener: () => {},
+            removeEventListener: () => {}
+          });
+        }
+        
+        // 9. Connection (realistic)
+        if ('connection' in navigator) {
+          Object.defineProperty(navigator, 'connection', {
+            get: () => ({
+              effectiveType: '4g',
+              downlink: 10,
+              rtt: 50,
+              saveData: false
+            })
+          });
+        }
+        
+        // 10. Media devices
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+          const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+          navigator.mediaDevices.enumerateDevices = async () => {
+            const devices = await origEnumerate();
+            return devices.length > 0 ? devices : [
+              { deviceId: 'default', kind: 'audioinput', label: '', groupId: '' },
+              { deviceId: 'default', kind: 'audiooutput', label: '', groupId: '' },
+              { deviceId: 'default', kind: 'videoinput', label: '', groupId: '' }
+            ];
+          };
+        }
+        
+        // 11. Hide automation from stack traces
+        Error.stackTraceLimit = 10;
+        
+        // 12. Mock hardware concurrency (realistic)
+        Object.defineProperty(navigator, 'hardwareConcurrency', {
+          get: () => 8
+        });
+        
+        // 13. Mock device memory
+        Object.defineProperty(navigator, 'deviceMemory', {
+          get: () => 8
         });
       });
     }
