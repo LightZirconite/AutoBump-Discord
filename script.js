@@ -1045,113 +1045,44 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       const pages = context.pages();
       page = pages.find(p => !p.isClosed()) || await context.newPage();
       
-      // Comprehensive anti-detection script
+      // Comprehensive anti-detection script (fixed for Discord compatibility)
       await page.addInitScript(() => {
-        // 1. Override navigator.webdriver
+        // 1. Override navigator.webdriver ONLY
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined,
+          configurable: true
         });
         
-        // 2. Mock chrome object
-        window.chrome = {
-          runtime: {},
-          loadTimes: function() {},
-          csi: function() {},
-          app: {}
-        };
-        
-        // 3. Override permissions API
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-          parameters.name === 'notifications' ?
-            Promise.resolve({ state: Notification.permission }) :
-            originalQuery(parameters)
-        );
-        
-        // 4. Mock plugins (realistic list)
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [
-            { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
-            { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
-            { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' },
-            { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer' },
-            { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer' }
-          ],
-        });
-        
-        // 5. Languages
-        Object.defineProperty(navigator, 'languages', {
-          get: () => ['en-US', 'en'],
-        });
-        
-        // 6. Override Playwright-specific properties
+        // 2. Remove automation markers
         delete navigator.__playwright;
         delete navigator.__pw_manual;
         delete navigator.__fxdriver_unwrapped;
         delete window.callPhantom;
         delete window._phantom;
         
-        // 7. WebGL Vendor (not "Google Inc.")
+        // 3. Preserve native EventTarget/addEventListener (CRITICAL for Discord)
+        // Do NOT override window.chrome or other native objects that Discord relies on
+        
+        // 4. Fix permissions API SAFELY
+        const originalQuery = window.navigator.permissions?.query;
+        if (originalQuery) {
+          window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+              Promise.resolve({ state: Notification.permission }) :
+              originalQuery.call(window.navigator.permissions, parameters)
+          );
+        }
+        
+        // 5. Minimal WebGL spoofing (avoid breaking Discord's renderer)
         const getParameter = WebGLRenderingContext.prototype.getParameter;
         WebGLRenderingContext.prototype.getParameter = function(parameter) {
-          if (parameter === 37445) {
-            return 'Intel Inc.';
-          }
-          if (parameter === 37446) {
-            return 'Intel Iris OpenGL Engine';
-          }
+          if (parameter === 37445) return 'Intel Inc.';
+          if (parameter === 37446) return 'Intel Iris OpenGL Engine';
           return getParameter.call(this, parameter);
         };
         
-        // 8. Battery API (realistic)
-        if ('getBattery' in navigator) {
-          navigator.getBattery = () => Promise.resolve({
-            charging: true,
-            chargingTime: 0,
-            dischargingTime: Infinity,
-            level: 1,
-            addEventListener: () => {},
-            removeEventListener: () => {}
-          });
-        }
-        
-        // 9. Connection (realistic)
-        if ('connection' in navigator) {
-          Object.defineProperty(navigator, 'connection', {
-            get: () => ({
-              effectiveType: '4g',
-              downlink: 10,
-              rtt: 50,
-              saveData: false
-            })
-          });
-        }
-        
-        // 10. Media devices
-        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-          const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
-          navigator.mediaDevices.enumerateDevices = async () => {
-            const devices = await origEnumerate();
-            return devices.length > 0 ? devices : [
-              { deviceId: 'default', kind: 'audioinput', label: '', groupId: '' },
-              { deviceId: 'default', kind: 'audiooutput', label: '', groupId: '' },
-              { deviceId: 'default', kind: 'videoinput', label: '', groupId: '' }
-            ];
-          };
-        }
-        
-        // 11. Hide automation from stack traces
-        Error.stackTraceLimit = 10;
-        
-        // 12. Mock hardware concurrency (realistic)
-        Object.defineProperty(navigator, 'hardwareConcurrency', {
-          get: () => 8
-        });
-        
-        // 13. Mock device memory
-        Object.defineProperty(navigator, 'deviceMemory', {
-          get: () => 8
-        });
+        // 6. Keep native chrome object intact (Discord checks this)
+        // DO NOT mock window.chrome - it breaks Discord's event system
       });
     }
 
