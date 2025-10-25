@@ -263,8 +263,8 @@ async function simpleBump(page, cfg) {
   await page.goto(channelUrl, { waitUntil: 'domcontentloaded' });
   const d = cfg.bumpDelays || {};
   const afterChannel = d.afterChannelMs ?? (cfg.simpleDelays?.afterChannelMs ?? 5000);
-  const finalizeAfterBumpsMs = d.finalizeAfterBumpsMs ?? 4000; // extra safety delay after sending the two bumps
-  await sleep(randomDelay(afterChannel, 0.2));
+  const preActionPause = Math.floor(Math.random() * 3000) + 2000; // Random 2-5s human pause
+  await sleep(randomDelay(afterChannel, 0.2) + preActionPause);
 
   const { active: sessionActive, state: sessionState } = await ensureSessionActive(page);
   if (!sessionActive) {
@@ -275,28 +275,39 @@ async function simpleBump(page, cfg) {
     throw new Error(`Session inactive before sending bumps (${reason})`);
   }
 
-  // Bumps
+  // Bumps avec variation humaine
   const betweenKeys = d.betweenKeysMs ?? 600;
   const afterFirstBump = d.afterFirstBumpMs ?? 1800;
   const afterSecondBump = d.afterSecondBumpMs ?? 1200;
   const inputSelector = 'div[data-slate-node="element"]';
   await page.waitForSelector(inputSelector, { timeout: 30000 });
   
+  // Random scroll before action (human behavior)
+  if (Math.random() < 0.6) { // 60% chance
+    await page.mouse.wheel(0, Math.floor(Math.random() * 200) - 100);
+    await sleep(randomDelay(400, 0.6));
+  }
+  
   // Human-like interaction before typing
   await humanClick(page, inputSelector).catch(() => page.click(inputSelector));
   await sleep(randomDelay(400, 0.5));
   
-  // First bump - human-like typing
-  await humanType(page, inputSelector, '/bump', { baseDelay: 85 });
+  // First bump - human-like typing with occasional typos simulation
+  const baseSpeed1 = 80 + Math.floor(Math.random() * 30); // 80-110ms per char
+  await humanType(page, inputSelector, '/bump', { baseDelay: baseSpeed1 });
   await sleep(randomDelay(betweenKeys, 0.3));
   await page.keyboard.press('Enter');
   await sleep(randomDelay(500, 0.4));
   await page.keyboard.press('Enter');
   log(`${ICONS.bump} First bump sent`);
-  await sleep(randomDelay(afterFirstBump, 0.2));
+  
+  // Variable wait between bumps (more human-like)
+  const firstBumpWait = afterFirstBump + Math.floor(Math.random() * 1000);
+  await sleep(randomDelay(firstBumpWait, 0.2));
   
   // Second bump - slightly different timing (human behavior)
-  await humanType(page, inputSelector, '/bump', { baseDelay: 90 });
+  const baseSpeed2 = 85 + Math.floor(Math.random() * 25); // 85-110ms per char
+  await humanType(page, inputSelector, '/bump', { baseDelay: baseSpeed2 });
   await sleep(randomDelay(betweenKeys, 0.3));
   await page.keyboard.press('ArrowDown');
   await sleep(randomDelay(400, 0.5));
@@ -313,6 +324,7 @@ async function simpleBump(page, cfg) {
   }
   await sleep(afterSecondBump);
   // Final small wait so Discord has time to process/send the last message before potential browser close
+  const finalizeAfterBumpsMs = d.finalizeAfterBumpsMs ?? 4000;
   if (finalizeAfterBumpsMs > 0) await sleep(finalizeAfterBumpsMs);
 }
 
@@ -611,8 +623,10 @@ async function shutdownAllBrowsers() {
 async function stabilize(page, cfg) {
   const startup = cfg.startup || {};
   const stabilizationMs = startup.stabilizationMs ?? 30000;
-  log(`Browser startup stabilization ${stabilizationMs}ms`);
-  await sleep(stabilizationMs);
+  const randomExtra = Math.floor(Math.random() * 10000); // 0-10s random extra
+  const totalWait = stabilizationMs + randomExtra;
+  log(`Browser startup stabilization ${formatDelay(totalWait)} (base: ${formatDelay(stabilizationMs)} + ${formatDelay(randomExtra)} random)`);
+  await sleep(totalWait);
 }
 
 async function readSessionState(page) {
@@ -1265,14 +1279,20 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
         const accCfg = { ...acc, __currentCycle: cycle };
         log(`${ICONS.user} Account ${i + 1}: ${accCfg.sessionName || 'session'}`);
         await runAccount(accCfg);
-        // Uniform wait between each execution, including before next cycle
+        
+        // Don't wait after the last account in the last cycle if maxCycles is reached
+        const isLastAccount = i === normalizedAccounts.length - 1;
+        const isLastCycle = maxCycles && cycle >= maxCycles;
+        if (isLastCycle && isLastAccount) break;
+        
+        // Wait calculation: uniform delay + jitter for all transitions
         const { total, jitter } = computeJitteredDelay();
         if (jitter > 0) {
           log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass (+${formatDelay(jitter)} random)`);
         } else {
           log(`${ICONS.time} Waiting ${formatDelay(total)} before next pass`);
         }
-        await waitDelayWithProgress(total, `cycle ${cycle} → waiting`);
+        await waitDelayWithProgress(total, `waiting before next account`);
       }
 
       console.log(createSeparator(`END CYCLE #${cycle}`, 'cycle'));
