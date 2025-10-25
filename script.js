@@ -882,8 +882,6 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       '--disable-features=IsolateOrigins',
       '--disable-site-isolation-trials',
       '--enable-features=NetworkService,NetworkServiceInProcess',
-      '--disable-automation',
-      '--excludeSwitches=enable-automation',
       '--disable-component-extensions-with-background-pages',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
@@ -896,7 +894,6 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       '--disable-sync',
       '--force-color-profile=srgb',
       '--metrics-recording-only',
-      '--enable-automation=false',
       '--password-store=basic',
       '--use-mock-keychain'
     ];
@@ -972,21 +969,24 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     })();
 
     const execPath = await resolveExecutablePath();
+    
+    // Build complete args list with automation flags explicitly disabled
+    const finalArgs = [
+      ...extraArgs,
+      '--disable-blink-features=AutomationControlled',
+      '--exclude-switches=enable-automation'
+    ];
+    
     const launchOptions = { 
       headless: headlessMode, 
       channel: execPath ? undefined : 'msedge',
-      args: extraArgs,
+      args: finalArgs,
       viewport: { width: 1280, height: 800 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
       permissions: ['notifications'],
       colorScheme: 'dark',
       deviceScaleFactor: 1,
-      ignoreDefaultArgs: [
-        '--enable-automation',
-        '--enable-blink-features=IdleDetection',
-        '--enable-logging'
-      ],
       chromiumSandbox: true,
       bypassCSP: false,
       javaScriptEnabled: true,
@@ -1016,8 +1016,26 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
       log(`${ICONS.browser} [${sessionName}] Reusing existing browser instance`);
     } else {
       log(`[${sessionName}] Opening browser`);
+      
+      // Create preferences to disable automation infobar
+      const prefsPath = path.join(userDataDir, 'Default');
+      try {
+        await fs.mkdir(prefsPath, { recursive: true });
+        const prefs = {
+          profile: {
+            default_content_setting_values: {
+              notifications: 1
+            }
+          },
+          credentials_enable_service: false,
+          profile_info_cache: {}
+        };
+        await fs.writeFile(path.join(prefsPath, 'Preferences'), JSON.stringify(prefs));
+      } catch {}
+      
       browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
       context = browser;
+      
       if (reuseBrowser) {
         poolEntry = rememberBrowserEntry(sessionKey, { browser, context, page: null, loggedIn: false, initialized: false });
       }
