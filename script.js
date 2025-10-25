@@ -6,7 +6,7 @@ async function loadConfig() {
   const noLineComments = noBlockComments.replace(/^\s*(#|\/\/).*$/gm, '');
   return JSON.parse(noLineComments);
 }
-import puppeteer from 'puppeteer';
+import { chromium } from 'playwright';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -37,6 +37,50 @@ function endInline() {
 
 // Simplified flow: sequential login + sending /bump
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Human-like randomization utilities
+function randomDelay(base, variance = 0.3) {
+  const min = base * (1 - variance);
+  const max = base * (1 + variance);
+  return Math.floor(min + Math.random() * (max - min));
+}
+
+function randomTypingSpeed() {
+  return 60 + Math.random() * 80; // 60-140ms per char
+}
+
+async function humanClick(page, selector) {
+  const element = await page.$(selector);
+  if (!element) return false;
+  
+  const box = await element.boundingBox();
+  if (!box) return false;
+  
+  // Click at random position within element (not always center)
+  const x = box.x + box.width * (0.3 + Math.random() * 0.4);
+  const y = box.y + box.height * (0.3 + Math.random() * 0.4);
+  
+  // Simulate mouse movement before click
+  await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 15) });
+  await sleep(randomDelay(100, 0.5));
+  await page.mouse.click(x, y);
+  return true;
+}
+
+async function humanType(page, selector, text, options = {}) {
+  const baseDelay = options.baseDelay || 85;
+  await page.click(selector);
+  await sleep(randomDelay(200, 0.5));
+  
+  for (const char of text) {
+    await page.keyboard.type(char, { delay: randomDelay(baseDelay, 0.4) });
+    // Occasional micro-pauses (human hesitation)
+    if (Math.random() < 0.15) {
+      await sleep(randomDelay(150, 0.6));
+    }
+  }
+}
+
 let LOG_MINIMAL = false;
 let LOG_COLORED = false;
 const ESSENTIAL_PATTERNS = [
@@ -154,13 +198,30 @@ async function simpleLogin(page, cfg, opts = {}) {
       const emailSel = 'input[name="email"], input[type="email"]';
       const passSel = 'input[name="password"][type="password"], input[type="password"]';
       await page.waitForSelector(emailSel, { timeout: 15000 });
-      await page.type(emailSel, email, { delay: 50 });
-      await sleep(afterTypeMs);
+      
+      // Human-like typing for email
+      await page.click(emailSel);
+      await sleep(randomDelay(300, 0.5));
+      for (const char of email) {
+        await page.keyboard.type(char, { delay: randomDelay(80, 0.5) });
+      }
+      await sleep(randomDelay(afterTypeMs, 0.3));
+      
       await page.waitForSelector(passSel, { timeout: 15000 });
-      await page.type(passSel, password, { delay: 50 });
-      await sleep(afterTypeMs);
+      
+      // Human-like typing for password
+      await page.click(passSel);
+      await sleep(randomDelay(250, 0.5));
+      for (const char of password) {
+        await page.keyboard.type(char, { delay: randomDelay(70, 0.5) });
+      }
+      await sleep(randomDelay(afterTypeMs, 0.3));
+      
       const btn = await page.$('button[type="submit"]');
-      if (btn) { await btn.click(); await sleep(submitWaitMs); }
+      if (btn) { 
+        await humanClick(page, 'button[type="submit"]').catch(() => btn.click());
+        await sleep(randomDelay(submitWaitMs, 0.3)); 
+      }
       log('Login attempt submitted');
     } catch (e) {
       log('Could not auto-fill credentials; continue manually.');
@@ -192,12 +253,18 @@ async function simpleLogin(page, cfg, opts = {}) {
 
 async function simpleBump(page, cfg) {
   const channelUrl = cfg.channelUrl || 'https://discord.com/channels/1150371679520968804/1300408274184830979';
+  
+  // Optional security step (may use different channel)
+  if (cfg.enableSecurityAction !== false) {
+    await configureSecurityActions24hInline(page, cfg);
+  }
+
   log('Navigate to bump channel');
   await page.goto(channelUrl, { waitUntil: 'domcontentloaded' });
   const d = cfg.bumpDelays || {};
   const afterChannel = d.afterChannelMs ?? (cfg.simpleDelays?.afterChannelMs ?? 5000);
   const finalizeAfterBumpsMs = d.finalizeAfterBumpsMs ?? 4000; // extra safety delay after sending the two bumps
-  await sleep(afterChannel);
+  await sleep(randomDelay(afterChannel, 0.2));
 
   const { active: sessionActive, state: sessionState } = await ensureSessionActive(page);
   if (!sessionActive) {
@@ -208,34 +275,33 @@ async function simpleBump(page, cfg) {
     throw new Error(`Session inactive before sending bumps (${reason})`);
   }
 
-  // Optional security step
-  if (cfg.enableSecurityAction !== false) {
-    await configureSecurityActions24hInline(page, cfg);
-  }
-
   // Bumps
   const betweenKeys = d.betweenKeysMs ?? 600;
   const afterFirstBump = d.afterFirstBumpMs ?? 1800;
   const afterSecondBump = d.afterSecondBumpMs ?? 1200;
   const inputSelector = 'div[data-slate-node="element"]';
   await page.waitForSelector(inputSelector, { timeout: 30000 });
-  await page.click(inputSelector);
-  await sleep(400);
-  // First bump
-  await page.keyboard.type('/bump', { delay: 85 });
-  await sleep(betweenKeys);
+  
+  // Human-like interaction before typing
+  await humanClick(page, inputSelector).catch(() => page.click(inputSelector));
+  await sleep(randomDelay(400, 0.5));
+  
+  // First bump - human-like typing
+  await humanType(page, inputSelector, '/bump', { baseDelay: 85 });
+  await sleep(randomDelay(betweenKeys, 0.3));
   await page.keyboard.press('Enter');
-  await sleep(500);
+  await sleep(randomDelay(500, 0.4));
   await page.keyboard.press('Enter');
   log(`${ICONS.bump} First bump sent`);
-  await sleep(afterFirstBump);
-  // Second bump
-  await page.keyboard.type('/bump', { delay: 85 });
-  await sleep(betweenKeys);
+  await sleep(randomDelay(afterFirstBump, 0.2));
+  
+  // Second bump - slightly different timing (human behavior)
+  await humanType(page, inputSelector, '/bump', { baseDelay: 90 });
+  await sleep(randomDelay(betweenKeys, 0.3));
   await page.keyboard.press('ArrowDown');
-  await sleep(400);
+  await sleep(randomDelay(400, 0.5));
   await page.keyboard.press('Enter');
-  await sleep(500);
+  await sleep(randomDelay(500, 0.4));
   await page.keyboard.press('Enter');
   log(`${ICONS.bump} Second bump sent`);
   if (cfg.webhookUrl) {
@@ -252,6 +318,32 @@ async function simpleBump(page, cfg) {
 
 // Configure 24h security directly within the bump flow
 async function configureSecurityActions24hInline(page, cfg) {
+  const bothChannels = cfg.securityActionInBothChannels === true;
+  const securityUrl = cfg.securityChannelUrl || cfg.channelUrl || 'https://discord.com/channels/1150371679520968804/1300408274184830979';
+  const channelUrl = cfg.channelUrl || 'https://discord.com/channels/1150371679520968804/1300408274184830979';
+  
+  const channelsToProcess = [];
+  
+  if (bothChannels && cfg.securityChannelUrl) {
+    // Both channels mode: security channel first, then bump channel
+    channelsToProcess.push({ url: securityUrl, label: 'security channel' });
+    channelsToProcess.push({ url: channelUrl, label: 'bump channel' });
+  } else {
+    // Single channel mode: use securityChannelUrl if set, otherwise channelUrl
+    channelsToProcess.push({ url: securityUrl, label: cfg.securityChannelUrl ? 'security channel' : 'bump channel' });
+  }
+  
+  for (const channel of channelsToProcess) {
+    await performSecurityActionOnChannel(page, cfg, channel.url, channel.label);
+  }
+}
+
+async function performSecurityActionOnChannel(page, cfg, targetUrl, label) {
+  // Navigate to target channel
+  log(`[Security] Navigate to ${label}`);
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+  await sleep(randomDelay(3000, 0.3));
+  
   const d = cfg.securityDelays || {};
   const preClick = d.preClickButtonMs ?? 800;
   const afterButton = d.afterClickButtonMs ?? 1600;
@@ -270,7 +362,7 @@ async function configureSecurityActions24hInline(page, cfg) {
 
   try { await page.waitForSelector(buttonSelector, { timeout: 10000 }); } catch { log('[Security] Button not found -> skipping'); return; }
   log('[Security] Button detected');
-  await sleep(preClick);
+  await sleep(randomDelay(preClick, 0.3));
 
   // Already configured?
   try {
@@ -283,12 +375,27 @@ async function configureSecurityActions24hInline(page, cfg) {
     if (already) { log('[Security] Already set to 24h -> skip'); if (cfg.webhookUrl) await postWebhook(cfg.webhookUrl, { event: 'security-skip', message: 'Already 24h' }); return; }
   } catch { log('[Security] Could not read initial state'); }
 
-  try { await page.click(buttonSelector); log('[Security] Panel opened (button click)'); } catch { log('[Security] Failed to click button'); return; }
-  await sleep(afterButton);
+  // Human-like click on security button
+  const clicked = await humanClick(page, buttonSelector).catch(async () => {
+    try { await page.click(buttonSelector); return true; } catch { return false; }
+  });
+  if (clicked) log('[Security] Panel opened (button click)');
+  else { log('[Security] Failed to click button'); return; }
+  await sleep(randomDelay(afterButton, 0.3));
 
-  // Open dropdown
-  try { await page.click(selectWrapper); log('[Security] Dropdown opened'); } catch { try { await page.click(valueSelector); log('[Security] Opened via value'); } catch { log('[Security] Could not open dropdown'); } }
-  await sleep(afterSelectOpen);
+  // Open dropdown with human-like behavior
+  try { 
+    await humanClick(page, selectWrapper).catch(() => page.click(selectWrapper)); 
+    log('[Security] Dropdown opened'); 
+  } catch { 
+    try { 
+      await humanClick(page, valueSelector).catch(() => page.click(valueSelector)); 
+      log('[Security] Opened via value'); 
+    } catch { 
+      log('[Security] Could not open dropdown'); 
+    } 
+  }
+  await sleep(randomDelay(afterSelectOpen, 0.3));
 
   // Click exact 24h option
   let picked = false;
@@ -301,7 +408,7 @@ async function configureSecurityActions24hInline(page, cfg) {
     }, option24Selector);
   } catch { }
   log(picked ? '[Security] 24h option selected' : '[Security] 24h option NOT found');
-  await sleep(afterOption);
+  await sleep(randomDelay(afterOption, 0.3));
 
   // Find and click the Save button (text-based polling, class-agnostic)
   // Strategy: poll until waitSaveButtonMs and try multiple click modes.
@@ -335,7 +442,7 @@ async function configureSecurityActions24hInline(page, cfg) {
         break;
       }
     } catch {}
-    if (!saveClicked) await sleep(savePollIntervalMs);
+    if (!saveClicked) await sleep(randomDelay(savePollIntervalMs, 0.3));
   }
   if (saveClicked) {
     log('[Security] Save button clicked');
@@ -344,7 +451,7 @@ async function configureSecurityActions24hInline(page, cfg) {
   } else {
     log('[Security] Save button not found (timeout)');
   }
-  await sleep(afterSave);
+  await sleep(randomDelay(afterSave, 0.3));
 
   // Final confirmation with polling
   let confirmed = false;
@@ -368,16 +475,16 @@ async function configureSecurityActions24hInline(page, cfg) {
   }
   if (!confirmed && securityDebugOnFail) {
     try {
-      await page.screenshot({ path: `security-fail-${Date.now()}.png` });
+      await page.screenshot({ path: `security-fail-${Date.now()}.png`, fullPage: false });
       log('[Security] Debug screenshot captured');
     } catch {}
   }
   if (cfg.webhookUrl && confirmed) {
     const sessionLabel = cfg.sessionName || 'session';
     const cycle = cfg.__currentCycle;
-    const meta = { session: sessionLabel, picked, saveClicked };
+    const meta = { session: sessionLabel, channel: label, picked, saveClicked };
     if (cycle !== undefined) meta.cycle = cycle;
-    await postWebhook(cfg.webhookUrl, { event: 'security-activated', message: 'Security 24h enabled', _meta: meta });
+    await postWebhook(cfg.webhookUrl, { event: 'security-activated', message: `Security 24h enabled in ${label}`, _meta: meta });
   }
 
   // Send a message in the channel to confirm the 24h activation
@@ -386,9 +493,9 @@ async function configureSecurityActions24hInline(page, cfg) {
     const chatMsg = (cfg.messages && cfg.messages.securityActivated && cfg.messages.securityActivated.text) || defaultMsg;
     try {
       await sendChannelMessage(page, chatMsg, cfg);
-      log('[Security] Confirmation message sent to channel');
+      log(`[Security] Confirmation message sent to ${label}`);
     } catch (e) {
-      log('[Security] Failed to send confirmation message to channel');
+      log(`[Security] Failed to send confirmation message to ${label}`);
     }
   }
 }
@@ -396,15 +503,21 @@ async function configureSecurityActions24hInline(page, cfg) {
 // Send a simple text message in the current channel
 async function sendChannelMessage(page, text, cfg) {
   const inputSelector = 'div[data-slate-node="element"]';
-  const d = cfg.bumpDelays || {};
-  const betweenKeys = d.betweenKeysMs ?? 60;
   await page.waitForSelector(inputSelector, { timeout: 30000 });
-  await page.click(inputSelector);
-  await sleep(200);
-  await page.keyboard.type(text, { delay: Math.min(betweenKeys, 120) });
-  await sleep(200);
+  
+  // Human-like message sending
+  await humanClick(page, inputSelector).catch(() => page.click(inputSelector));
+  await sleep(randomDelay(200, 0.5));
+  
+  // Type with human-like variance
+  for (const char of text) {
+    await page.keyboard.type(char, { delay: randomDelay(75, 0.4) });
+    if (Math.random() < 0.1) await sleep(randomDelay(120, 0.6));
+  }
+  
+  await sleep(randomDelay(200, 0.5));
   await page.keyboard.press('Enter');
-  await sleep(300);
+  await sleep(randomDelay(300, 0.4));
 }
 
 async function postWebhook(url, payload) {
@@ -462,21 +575,15 @@ async function postWebhook(url, payload) {
   }
 }
 
-// Send embed (Discord) – backwards-compatible helper
-async function postWebhookEmbed(url, { title, description, color = 5793266, fields = [], footer, timestamp = true }) {
-  // Kept for retro-compatibility, forwards to postWebhook
-  return postWebhook(url, { event: title || 'info', message: description || '', embedOnly: true, _meta: Object.fromEntries(fields.map(f => [f.name || 'field', f.value])) });
-}
-
 function getBrowserEntry(key) {
   const entry = browserPool.get(key);
   if (!entry) return null;
   const browser = entry.browser;
-  if (!browser || (typeof browser.isConnected === 'function' && !browser.isConnected())) {
+  if (!browser) {
     browserPool.delete(key);
     return null;
   }
-  if (entry.page && typeof entry.page.isClosed === 'function' && entry.page.isClosed()) {
+  if (entry.page && entry.page.isClosed()) {
     entry.page = null;
   }
   return entry;
@@ -484,9 +591,9 @@ function getBrowserEntry(key) {
 
 function rememberBrowserEntry(key, entry) {
   browserPool.set(key, entry);
-  if (!entry._disconnectHandler && entry.browser && typeof entry.browser.once === 'function') {
-    entry._disconnectHandler = () => browserPool.delete(key);
-    entry.browser.once('disconnected', entry._disconnectHandler);
+  if (!entry._closeHandler && entry.browser && typeof entry.browser.on === 'function') {
+    entry._closeHandler = () => browserPool.delete(key);
+    entry.browser.on('close', entry._closeHandler);
   }
   return entry;
 }
@@ -649,9 +756,8 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
 
 (async () => {
   const cfg = await loadConfig();
-  // Logging: nouveau schéma (cfg.logging) avec compat ancienne clé
-  LOG_MINIMAL = !!(cfg.logging?.minimal ?? cfg.minimalLogs);
-  LOG_COLORED = !!(cfg.logging?.colored ?? cfg.coloredLogs);
+  LOG_MINIMAL = !!(cfg.logging?.minimal);
+  LOG_COLORED = !!(cfg.logging?.colored);
   // Configure UI inline/spinner from cfg (guard against TDZ by using globalThis)
   {
     const u = (globalThis.UI ||= { inlineProgress: true, spinner: true });
@@ -766,12 +872,15 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     }
 
     const extraArgs = [
-      '--window-size=1200,900',
+      '--window-size=1920,1080',
       '--no-first-run',
       '--no-default-browser-check',
-      '--disable-session-crashed-bubble',
-      '--disable-features=Translate,ExtensionsToolbarMenu',
-      '--disable-infobars'
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-infobars',
+      '--disable-features=IsolateOrigins',
+      '--disable-site-isolation-trials',
+      '--enable-features=NetworkService,NetworkServiceInProcess'
     ];
 
     function isWSL() {
@@ -819,7 +928,7 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     }
 
     async function resolveExecutablePath() {
-      const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
+      const fromEnv = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
       if (fromEnv && await fileExists(fromEnv)) return fromEnv;
 
       if (process.platform === 'win32') {
@@ -833,46 +942,87 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
         if (macBrowser) return macBrowser;
       }
 
-      try {
-        const p = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
-        if (p && await fileExists(p)) return p;
-      } catch {}
-
       return null;
     }
 
     const headlessMode = (() => {
       if (typeof accountCfg.headless !== 'undefined') return accountCfg.headless;
       if (process.platform === 'linux' || isWSL()) {
-        return process.env.DISPLAY ? false : 'new';
+        return process.env.DISPLAY ? false : true;
       }
       return false;
     })();
 
     const execPath = await resolveExecutablePath();
-    const launchOptions = { headless: headlessMode, defaultViewport: null, userDataDir, args: extraArgs };
+    const launchOptions = { 
+      headless: headlessMode, 
+      channel: execPath ? undefined : 'msedge',
+      args: extraArgs,
+      viewport: { width: 1920, height: 1080 },
+      locale: 'en-US',
+      timezoneId: 'America/New_York',
+      permissions: ['notifications'],
+      colorScheme: 'dark',
+      deviceScaleFactor: 1,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0'
+    };
     if (execPath) launchOptions.executablePath = execPath;
 
     let browser;
     let page;
+    let context;
     if (poolEntry?.browser) {
       browser = poolEntry.browser;
+      context = poolEntry.context;
       const maybePage = poolEntry.page;
-      if (maybePage && typeof maybePage.isClosed === 'function' && !maybePage.isClosed()) {
+      if (maybePage && !maybePage.isClosed()) {
         page = maybePage;
       }
       log(`${ICONS.browser} [${sessionName}] Reusing existing browser instance`);
     } else {
       log(`[${sessionName}] Opening browser`);
-      browser = await puppeteer.launch(launchOptions);
+      browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
+      context = browser;
       if (reuseBrowser) {
-        poolEntry = rememberBrowserEntry(sessionKey, { browser, page: null, loggedIn: false, initialized: false });
+        poolEntry = rememberBrowserEntry(sessionKey, { browser, context, page: null, loggedIn: false, initialized: false });
       }
     }
 
     if (!page) {
-      const pages = await browser.pages();
-      page = pages.find(p => !(typeof p.isClosed === 'function' && p.isClosed())) || await browser.newPage();
+      const pages = context.pages();
+      page = pages.find(p => !p.isClosed()) || await context.newPage();
+      
+      // Anti-detection: override navigator.webdriver
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined,
+        });
+        
+        // Mock chrome object for better detection avoidance
+        window.chrome = {
+          runtime: {},
+          loadTimes: function() {},
+          csi: function() {},
+          app: {}
+        };
+        
+        // Prevent permission detection
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+          parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+        );
+        
+        // Mock plugins
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [1, 2, 3, 4, 5],
+        });
+        
+        Object.defineProperty(navigator, 'languages', {
+          get: () => ['en-US', 'en'],
+        });
+      });
     }
 
     if (reuseBrowser && poolEntry) {
@@ -880,7 +1030,7 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
     }
 
     if (accountCfg.cleanupBlankPages !== false) {
-      const openPages = await browser.pages();
+      const openPages = context.pages();
       for (const extraPage of openPages) {
         if (extraPage === page) continue;
         try {

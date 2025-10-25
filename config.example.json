@@ -1,8 +1,4 @@
 {
-  "logging": {
-    "minimal": false,
-    "colored": false
-  },
   "runtime": {
     "reuseBrowser": true,
     "keepBrowserOpen": false
@@ -29,17 +25,21 @@
       "email": "",
       "password": "",
       "sessionName": "",
+      "securityChannelUrl": "",
       "channelUrl": "",
       "webhookUrl": "",
-      "enableSecurityAction": true
+      "enableSecurityAction": true,
+      "securityActionInBothChannels": false
     },
     {
       "email": "",
       "password": "",
       "sessionName": "",
+      "securityChannelUrl": "",
       "channelUrl": "",
       "webhookUrl": "",
-      "enableSecurityAction": true
+      "enableSecurityAction": true,
+      "securityActionInBothChannels": false
     }
   ]
 }
