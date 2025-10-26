@@ -625,7 +625,18 @@ async function stabilize(page, cfg) {
   const stabilizationMs = startup.stabilizationMs ?? 30000;
   const randomExtra = Math.floor(Math.random() * 10000); // 0-10s random extra
   const totalWait = stabilizationMs + randomExtra;
-  log(`Browser startup stabilization ${formatDelay(totalWait)} (base: ${formatDelay(stabilizationMs)} + ${formatDelay(randomExtra)} random)`);
+  // Use a local formatter to avoid possible hoisting/scope issues at runtime
+  const localFormat = (ms) => {
+    if (ms === undefined || ms === null) return String(ms);
+    if (ms < 1000) return ms + ' ms';
+    const sec = Math.round(ms / 1000);
+    if (sec < 60) return sec + ' s';
+    const min = Math.floor(sec / 60);
+    const rem = sec % 60;
+    if (rem === 0) return `${min} min`;
+    return `${min} min ${rem} s`;
+  };
+  log(`Browser startup stabilization ${localFormat(totalWait)} (base: ${localFormat(stabilizationMs)} + ${localFormat(randomExtra)} random)`);
   await sleep(totalWait);
 }
 
@@ -1160,7 +1171,9 @@ async function pokeChooseAccountIfVisible(page, accountCfg) {
           needsLogin = false;
         } catch (loginErr) {
           const loginMsg = loginErr?.message || String(loginErr);
+          // Log full stack to help debug ReferenceErrors (was only logging message)
           console.error(`${ICONS.error} [${sessionName}] Login error:`, loginMsg);
+          if (loginErr && loginErr.stack) console.error(loginErr.stack);
           await notifyError(loginMsg);
           break;
         }
