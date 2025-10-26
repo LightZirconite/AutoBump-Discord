@@ -234,17 +234,15 @@ async function simpleLogin(page, cfg, opts = {}) {
   while (Date.now() - start < maxWaitMs) {
     try {
       const { active, state, disconnected } = await ensureSessionActive(page);
-      if (disconnected) {
-        log(`${ICONS.error} Discord connection lost (WebSocket or overlay detected)`);
-        throw new Error('Discord connection lost');
-      }
+      // Ne pas traiter 'disconnected' comme fatal pendant le login (peut être transitoire)
+      // On attend juste que 'active' devienne true
       if (active) {
         const hint = state.path && !/\/login(\b|$)/.test(state.path) ? state.path : 'session active';
         log(`${ICONS.connected} Signed in (${hint}).`);
         return true;
       }
     } catch (e) {
-      if (e.message && /connection lost/i.test(e.message)) throw e;
+      // Ignorer les erreurs de vérification pendant le login
     }
     await sleep(2000);
   }
@@ -266,7 +264,12 @@ async function simpleBump(page, cfg) {
   const preActionPause = Math.floor(Math.random() * 3000) + 2000; // Random 2-5s human pause
   await sleep(randomDelay(afterChannel, 0.2) + preActionPause);
 
-  const { active: sessionActive, state: sessionState } = await ensureSessionActive(page);
+  const { active: sessionActive, state: sessionState, disconnected } = await ensureSessionActive(page);
+  // Si disconnected mais qu'on a quand même la sidebar (active=true), c'est un faux positif
+  if (disconnected && !sessionActive) {
+    log(`${ICONS.warning} Discord may have connection issues, but continuing...`);
+    // On ne throw pas, on continue prudemment
+  }
   if (!sessionActive) {
     const currentUrl = page.url();
     const reason = sessionState?.path && /\/login(\b|$)/.test(sessionState.path)
@@ -657,18 +660,20 @@ async function readSessionState(page) {
 // Vérifie si la session Discord est active (sidebar présente ET pas de message d'erreur de déconnexion)
 async function ensureSessionActive(page) {
   const state = await readSessionState(page);
-  // Vérifie la présence d'un message d'erreur de déconnexion
+  // Vérifie la présence d'un message d'erreur de déconnexion (plus stricte pour éviter faux positifs)
   let disconnected = false;
   try {
     disconnected = await page.evaluate(() => {
-      // Discord affiche souvent un message "Reconnecting" ou "Connection lost"
-      const errorBanner = document.querySelector('[class*="connectionError"]') || document.querySelector('[class*="reconnect"]');
+      // Discord affiche un banner spécifique avec ces classes lors d'une vraie déconnexion
+      const errorBanner = document.querySelector('[class*="connectionError"]') || 
+                         document.querySelector('[class*="reconnect"]') ||
+                         document.querySelector('[class*="notice"][class*="error"]');
       if (errorBanner && errorBanner.textContent) {
-        return /connect|reconnect|déconnecté|perdu/i.test(errorBanner.textContent);
+        const text = errorBanner.textContent.toLowerCase();
+        // Vérifier que c'est vraiment un message de déconnexion, pas juste un bouton "connect"
+        return /lost.*connection|connection.*lost|reconnecting|disconnected/i.test(text);
       }
-      // Certains overlays affichent "Lost connection" ou "Trying to reconnect"
-      const overlays = Array.from(document.querySelectorAll('div, span')).filter(e => e.textContent && /connect|reconnect|déconnecté|perdu/i.test(e.textContent));
-      return overlays.length > 0;
+      return false;
     });
   } catch {}
   if (disconnected) return { active: false, state, disconnected: true };
